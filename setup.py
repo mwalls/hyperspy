@@ -40,8 +40,8 @@ if os.path.exists('build'):
     distutils.dir_util.remove_tree('build')
 
 install_req = ['scipy',
-               'ipython (>= 2.0)',
-               'matplotlib (>= 1.2)',
+               'ipython>=2.0',
+               'matplotlib>= 1.2',
                'numpy',
                'traits',
                'traitsui',
@@ -144,7 +144,7 @@ with update_version_when_dev() as version:
                   'hyperspy.external.mpfit',
                   'hyperspy.external.astroML',
                   ],
-        requires=install_req,
+        install_requires=install_req,
         scripts=scripts,
         package_data={
             'hyperspy':
