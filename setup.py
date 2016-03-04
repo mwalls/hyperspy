@@ -16,14 +16,21 @@
 # You should have received a copy of the GNU General Public License
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import print_function
+
+import sys
+
+v = sys.version_info
+if v[:2] < (2, 7) or (v[0] > 2):
+    error = "ERROR: HyperSpy 0.8.3 requires Python version 2.7. Install a " \
+            "newer version for Python 3 support."
+    print(error, file=sys.stderr)
+    sys.exit(1)
 
 from distutils.core import setup
-
 import distutils.dir_util
-
 import os
 import subprocess
-import sys
 import fileinput
 
 import hyperspy.Release as Release
@@ -83,9 +90,9 @@ class update_version_when_dev:
             for line in fileinput.FileInput("hyperspy/Release.py",
                                             inplace=1):
                 if line.startswith('version = '):
-                    print "version = \"%s\"" % self.version
+                    print("version = \"%s\"") % self.version
                 else:
-                    print line,
+                    print(line),
             self.restore_version = True
         else:
             self.version = self.release_version
@@ -96,9 +103,9 @@ class update_version_when_dev:
             for line in fileinput.FileInput("hyperspy/Release.py",
                                             inplace=1):
                 if line.startswith('version = '):
-                    print "version = \"%s\"" % self.release_version
+                    print("version = \"%s\"") % self.release_version
                 else:
-                    print line,
+                    print(line)
 
 
 with update_version_when_dev() as version:
