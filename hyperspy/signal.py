@@ -2091,7 +2091,7 @@ class MVATools(object):
         ----------
 
         comp_ids : None, int, or list of ints
-            if None, returns maps of all components.
+            if None, returns maps of first 6 components.
             if int, returns maps of components with ids from 0 to given
             int.
             if list of ints, returns maps of components with ids in
@@ -2134,8 +2134,7 @@ class MVATools(object):
             same_window = preferences.MachineLearning.same_window
         factors = self.learning_results.factors
         if comp_ids is None:
-            comp_ids = self.learning_results.output_dimension
-
+            comp_ids = 6
         return self._plot_factors_or_pchars(factors,
                                             comp_ids=comp_ids,
                                             calibrate=calibrate,
@@ -2217,7 +2216,7 @@ class MVATools(object):
         ----------
 
         comp_ids : None, int, or list of ints
-            if None, returns maps of all components.
+            if None, returns maps of first 6 components.
             if int, returns maps of components with ids from 0 to
             given int.
             if list of ints, returns maps of components with ids in
@@ -2273,7 +2272,7 @@ class MVATools(object):
             factors = None
 
         if comp_ids is None:
-            comp_ids = self.learning_results.output_dimension
+            comp_ids = 6
         return self._plot_loadings(
             loadings,
             comp_ids=comp_ids,
