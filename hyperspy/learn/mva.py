@@ -33,11 +33,10 @@ from hyperspy.misc.machine_learning import import_sklearn
 import hyperspy.misc.io.tools as io_tools
 from hyperspy.learn.svd_pca import svd_pca
 from hyperspy.learn.mlpca import mlpca
-from hyperspy.decorators import do_not_replot
+from hyperspy.learn.rpca import rpca_godec, orpca
 from scipy import linalg
 from hyperspy.misc.machine_learning.orthomax import orthomax
-from hyperspy.misc.utils import stack
-
+from hyperspy.misc.utils import stack, ordinal
 
 _logger = logging.getLogger(__name__)
 
@@ -87,7 +86,7 @@ def _normalize_components(target, other, function=np.sum):
 class MVA():
 
     """
-    Multivariate analysis capabilities for the Spectrum class.
+    Multivariate analysis capabilities for the Signal1D class.
 
     """
 
@@ -95,7 +94,6 @@ class MVA():
         if not hasattr(self, 'learning_results'):
             self.learning_results = LearningResults()
 
-    @do_not_replot
     def decomposition(self,
                       normalize_poissonian_noise=False,
                       algorithm='svd',
@@ -108,6 +106,7 @@ class MVA():
                       var_func=None,
                       polyfit=None,
                       reproject=None,
+                      return_info=False,
                       **kwargs):
         """Decomposition with a choice of algorithms
 
@@ -117,51 +116,49 @@ class MVA():
         ----------
         normalize_poissonian_noise : bool
             If True, scale the SI to normalize Poissonian noise
-
         algorithm : 'svd' | 'fast_svd' | 'mlpca' | 'fast_mlpca' | 'nmf' |
-            'sparse_pca' | 'mini_batch_sparse_pca'
-
+            'sparse_pca' | 'mini_batch_sparse_pca' | 'RPCA_GoDec' | 'ORPCA'
         output_dimension : None or int
             number of components to keep/calculate
-
         centre : None | 'variables' | 'trials'
             If None no centring is applied. If 'variable' the centring will be
             performed in the variable axis. If 'trials', the centring will be
             performed in the 'trials' axis. It only has effect when using the
             svd or fast_svd algorithms
-
         auto_transpose : bool
             If True, automatically transposes the data to boost performance.
             Only has effect when using the svd of fast_svd algorithms.
-
         navigation_mask : boolean numpy array
             The navigation locations marked as True are not used in the
             decompostion.
-
         signal_mask : boolean numpy array
             The signal locations marked as True are not used in the
             decomposition.
-
         var_array : numpy array
             Array of variance for the maximum likelihood PCA algorithm
-
         var_func : function or numpy array
             If function, it will apply it to the dataset to obtain the
             var_array. Alternatively, it can a an array with the coefficients
             of a polynomial.
-
-        polyfit :
-
         reproject : None | signal | navigation | both
             If not None, the results of the decomposition will be projected in
             the selected masked area.
+        return_info: bool, default False
+            The result of the decomposition is stored internally. However, some algorithms generate some extra
+            information that is not stored. If True (the default is False) return any extra information if available
 
+        Returns
+        -------
+        (X, E) : (numpy array, numpy array)
+            If 'algorithm' == 'RPCA_GoDec' or 'ORPCA' and 'return_info' is True,
+            returns the low-rank (X) and sparse (E) matrices from robust PCA.
 
         See also
         --------
         plot_decomposition_factors, plot_decomposition_loadings, plot_lev
 
         """
+        to_return = None
         # Check if it is the wrong data type
         if self.data.dtype.char not in ['e', 'f', 'd']:  # If not float
             _logger.warning(
@@ -176,6 +173,8 @@ class MVA():
                                  "with navigation_size < 2")
         # backup the original data
         self._data_before_treatments = self.data.copy()
+        # set the output target (peak results or not?)
+        target = LearningResults()
 
         if algorithm == 'mlpca':
             if normalize_poissonian_noise is True:
@@ -185,8 +184,13 @@ class MVA():
                     "normalize_poissonian_noise is set to False")
                 normalize_poissonian_noise = False
             if output_dimension is None:
-                raise ValueError("With the mlpca algorithm the "
-                                 "output_dimension must be expecified")
+                raise ValueError("With the MLPCA algorithm the "
+                                 "output_dimension must be specified")
+        if algorithm == 'RPCA_GoDec' or algorithm == 'ORPCA':
+            if output_dimension is None:
+                raise ValueError("With the robust PCA algorithms ('RPCA_GoDec' "
+                                 "and 'ORPCA'), the output_dimension "
+                                 "must be specified")
 
         # Apply pre-treatments
         # Transform the data in a line spectrum
@@ -211,8 +215,6 @@ class MVA():
             # case.
             dc = (self.data if self.axes_manager[0].index_in_array == 0
                   else self.data.T)
-            # set the output target (peak results or not?)
-            target = self.learning_results
 
             # Transform the None masks in slices to get the right behaviour
             if navigation_mask is None:
@@ -260,6 +262,8 @@ class MVA():
                 explained_variance = sk.explained_variance_
                 mean = sk.mean_
                 centre = 'trials'
+                if return_info:
+                    to_return = sk
 
             elif algorithm == 'nmf':
                 if import_sklearn.sklearn_installed is False:
@@ -270,6 +274,8 @@ class MVA():
                 loadings = sk.fit_transform((
                     dc[:, signal_mask][navigation_mask, :]))
                 factors = sk.components_.T
+                if return_info:
+                    to_return = sk
 
             elif algorithm == 'sparse_pca':
                 if import_sklearn.sklearn_installed is False:
@@ -280,6 +286,8 @@ class MVA():
                 loadings = sk.fit_transform(
                     dc[:, signal_mask][navigation_mask, :])
                 factors = sk.components_.T
+                if return_info:
+                    to_return = sk
 
             elif algorithm == 'mini_batch_sparse_pca':
                 if import_sklearn.sklearn_installed is False:
@@ -290,6 +298,8 @@ class MVA():
                 loadings = sk.fit_transform(
                     dc[:, signal_mask][navigation_mask, :])
                 factors = sk.components_.T
+                if return_info:
+                    to_return = sk
 
             elif algorithm == 'mlpca' or algorithm == 'fast_mlpca':
                 _logger.info("Performing the MLPCA training")
@@ -331,6 +341,33 @@ class MVA():
                 factors = V
                 explained_variance_ratio = S ** 2 / Sobj
                 explained_variance = S ** 2 / len(factors)
+            elif algorithm == 'RPCA_GoDec':
+                _logger.info("Performing Robust PCA with GoDec")
+
+                X, E, G, U, S, V = rpca_godec(
+                    dc[:, signal_mask][navigation_mask, :],
+                    rank=output_dimension, fast=True, **kwargs)
+
+                loadings = U * S
+                factors = V
+                explained_variance = S ** 2 / len(factors)
+
+                if return_info:
+                    to_return = (X, E)
+
+            elif algorithm == 'ORPCA':
+                _logger.info("Performing Online Robust PCA")
+
+                X, E, U, S, V = orpca(
+                    dc[:, signal_mask][navigation_mask, :],
+                    rank=output_dimension, fast=True, **kwargs)
+
+                loadings = U * S
+                factors = V
+                explained_variance = S ** 2 / len(factors)
+
+                if return_info:
+                    to_return = (X, E)
             else:
                 raise ValueError('Algorithm not recognised. '
                                  'Nothing done')
@@ -344,6 +381,7 @@ class MVA():
                     explained_variance / explained_variance.sum()
 
             # Store the results in learning_results
+
             target.factors = factors
             target.loadings = loadings
             target.explained_variance = explained_variance
@@ -422,8 +460,11 @@ class MVA():
             if self._unfolded4decomposition is True:
                 self.fold()
                 self._unfolded4decomposition is False
+            self.learning_results.__dict__.update(target.__dict__)
             # undo any pre-treatments
             self.undo_treatments()
+
+        return to_return
 
     def blind_source_separation(self,
                                 number_of_components=None,
@@ -474,8 +515,11 @@ class MVA():
         **kwargs : extra key word arguments
             Any keyword arguments are passed to the BSS algorithm.
 
+        FastICA documentation is here, with more arguments that can be passed as **kwargs:
+        http://scikit-learn.org/stable/modules/generated/sklearn.decomposition.FastICA.html
+
         """
-        from hyperspy.signal import Signal
+        from hyperspy.signal import BaseSignal
 
         lr = self.learning_results
 
@@ -492,9 +536,9 @@ class MVA():
                     factors = self.get_decomposition_factors()
 
         # Check factors
-        if not isinstance(factors, Signal):
+        if not isinstance(factors, BaseSignal):
             raise ValueError(
-                "`factors` must be a Signal instance, but an object of type "
+                "`factors` must be a BaseSignal instance, but an object of type "
                 "%s was provided." %
                 type(factors))
 
@@ -515,7 +559,7 @@ class MVA():
         if mask is not None:
             ref_shape, space = (factors.axes_manager.signal_shape,
                                 "navigation" if on_loadings else "signal")
-            if isinstance(mask, Signal):
+            if isinstance(mask, BaseSignal):
                 if mask.axes_manager.signal_shape != ref_shape:
                     raise ValueError(
                         "The `mask` signal shape is not equal to the %s shape."
@@ -579,7 +623,7 @@ class MVA():
         factors.unfold()
         if mask is not None:
             mask.unfold()
-            factors = factors.data.T[~mask.data]
+            factors = factors.data.T[np.where(~mask.data)]
         else:
             factors = factors.data.T
 
@@ -630,6 +674,7 @@ class MVA():
         self._unmix_components()
         self._auto_reverse_bss_component(lr)
         lr.bss_algorithm = algorithm
+        lr.bss_node = str(lr.bss_node)
 
     def normalize_decomposition_components(self, target='factors',
                                            function=np.sum):
@@ -749,7 +794,6 @@ class MVA():
                 self.reverse_bss_component(i)
                 _logger.info("IC %i reversed" % i)
 
-    @do_not_replot
     def _calculate_recmatrix(self, components=None, mva_type=None,):
         """
         Rebuilds SIs from selected components
@@ -848,11 +892,11 @@ class MVA():
 
     def get_explained_variance_ratio(self):
         """Return the explained variation ratio of the PCA components as a
-        Spectrum.
+        Signal1D.
 
         Returns
         -------
-        s : Spectrum
+        s : Signal1D
             Explained variation ratio.
 
         See Also:
@@ -863,55 +907,222 @@ class MVA():
         `get_decomposition_factors`.
 
         """
-        from hyperspy._signals.spectrum import Spectrum
+        from hyperspy._signals.signal1d import Signal1D
         target = self.learning_results
         if target.explained_variance_ratio is None:
             raise AttributeError("The explained_variance_ratio attribute is "
                                  "`None`, did you forget to perform a PCA "
                                  "decomposition?")
-        s = Spectrum(target.explained_variance_ratio)
+        s = Signal1D(target.explained_variance_ratio)
         s.metadata.General.title = self.metadata.General.title + \
             "\nPCA Scree Plot"
         s.axes_manager[-1].name = 'Principal component index'
         s.axes_manager[-1].units = ''
         return s
 
-    def plot_explained_variance_ratio(self, n=50, log=True):
-        """Plot the decomposition explained variance ratio vs index number.
+    def plot_explained_variance_ratio(self, n=None, log=True, threshold=0,
+                                      hline='auto', xaxis_type='index',
+                                      xaxis_labeling=None, signal_fmt=None,
+                                      noise_fmt=None, fig=None, ax=None,
+                                      **kwargs):
+        """Plot the decomposition explained variance ratio vs index number
+        (Scree Plot).
 
         Parameters
         ----------
-        n : int
-            Number of components.
+        n : int or None
+            Number of components to plot. If None, all components will be plot
         log : bool
             If True, the y axis uses a log scale.
+        threshold : float or int
+            Threshold used to determine how many components should be
+            highlighted as signal (as opposed to noise).
+            If a float (between 0 and 1), ``threshold`` will be
+            interpreted as a cutoff value, defining the variance at which to
+            draw a line showing the cutoff between signal and noise;
+            the number of signal components will be automatically determined
+            by the cutoff value.
+            If an int, ``threshold`` is interpreted as the number of
+            components to highlight as signal (and no cutoff line will be
+            drawn)
+        hline: {'auto', True, False}
+            Whether or not to draw a horizontal line illustrating the variance
+            cutoff for signal/noise determination. Default is to draw the line
+            at the value given in ``threshold`` (if it is a float) and not
+            draw in the case  ``threshold`` is an int, or not given.
+            If True, (and ``threshold`` is an int), the line will be drawn
+            through the last component defined as signal.
+            If False, the line will not be drawn in any circumstance.
+        xaxis_type : {'index', 'number'}
+            Determines the type of labeling applied to the x-axis.
+            If ``'index'``, axis will be labeled starting at 0 (i.e.
+            "pythonic index" labeling); if ``'number'``, it will start at 1
+            (number labeling).
+        xaxis_labeling : {'ordinal', 'cardinal', None}
+            Determines the format of the x-axis tick labels. If ``'ordinal'``,
+            "1st, 2nd, ..." will be used; if ``'cardinal'``, "1, 2,
+            ..." will be used. If None, an appropriate default will be
+            selected.
+        signal_fmt : dict
+            Dictionary of matplotlib formatting values for the signal
+            components
+        noise_fmt : dict
+            Dictionary of matplotlib formatting values for the noise
+            components
+        fig : matplotlib figure or None
+            If None, a default figure will be created, otherwise will plot
+            into fig
+        ax : matplotlib ax (subplot) or None
+            If None, a default ax will be created, otherwise will plot into ax
+        **kwargs
+            remaining keyword arguments are passed to matplotlib.figure()
+
+        Example
+        --------
+        To generate a scree plot with customized symbols for signal vs.
+        noise components and a modified cutoff threshold value:
+
+        >>> s = hs.load("some_spectrum_image")
+        >>> s.decomposition()
+        >>> s.plot_explained_variance_ratio(n=40,
+        >>>                                 threshold=0.005,
+        >>>                                 signal_fmt={'marker': 'v',
+        >>>                                             's': 150,
+        >>>                                             'c': 'pink'}
+        >>>                                 noise_fmt={'marker': '*',
+        >>>                                             's': 200,
+        >>>                                             'c': 'green'})
 
         Returns
         -------
+
         ax : matplotlib.axes
 
-        See Also:
-        ---------
 
-        `get_explained_variance_ration`, `decomposition`,
-        `get_decomposition_loadings`,
-        `get_decomposition_factors`.
+        See Also
+        --------
+
+        :py:meth:`~.learn.mva.MVA.decomposition`,
+        :py:meth:`~.learn.mva.MVA.get_explained_variance_ratio`,
+        :py:meth:`~.signal.MVATools.get_decomposition_loadings`,
+        :py:meth:`~.signal.MVATools.get_decomposition_factors`
 
         """
         s = self.get_explained_variance_ratio()
+
+        if n is None:
+            n = len(self.learning_results.explained_variance_ratio)
+
+        # Determine right number of components for signal and cutoff value
+        if isinstance(threshold, float):
+            if not 0 < threshold < 1:
+                raise ValueError('Variance threshold should be between 0 and'
+                                 ' 1')
+            # Catch if the threshold is less than the minimum variance value:
+            if threshold < s.data.min():
+                n_signal_pcs = n
+            else:
+                n_signal_pcs = np.where((s < threshold).data)[0][0]
+        else:
+            n_signal_pcs = threshold
+            if n_signal_pcs == 0:
+                hline = False
+
+        # Handling hline logic
+        if hline == 'auto':
+            # Set cutoff to threshold if float
+            if isinstance(threshold, float):
+                cutoff = threshold
+            # Turn off the hline otherwise
+            else:
+                hline = False
+        # If hline is True and threshold is int, set cutoff at value of last
+        # signal component
+        elif hline:
+            if isinstance(threshold, float):
+                cutoff = threshold
+            elif n_signal_pcs > 0:
+                cutoff = s.data[n_signal_pcs - 1]
+        # Catches hline==False and hline==True (if threshold not given)
+        else:
+            hline = False
+
+        # Some default formatting for signal markers
+        if signal_fmt is None:
+            signal_fmt = {'c': '#C24D52',
+                          's': 100,
+                          'marker': "^",
+                          'zorder': 3}
+
+        # Some default formatting for noise markers
+        if noise_fmt is None:
+            noise_fmt = {'c': '#4A70B0',
+                         's': 100,
+                         'marker': 'o',
+                         'zorder': 3}
+
+        # Sane defaults for xaxis labeling
+        if xaxis_labeling is None:
+            xaxis_labeling = 'cardinal' if xaxis_type == 'index' else 'ordinal'
+
+        axes_titles = {'y': "Proportion of variance",
+                       'x': "Principal component {}".format(xaxis_type)}
+
         if n < s.axes_manager[-1].size:
             s = s.isig[:n]
-        s.plot()
-        ax = s._plot.signal_plot.ax
-        # ax.plot(range(n), target.explained_variance_ratio[:n], 'o',
-        #         label=label)
-        ax.set_ylabel("Explained variance ratio")
+
+        if fig is None:
+            fig = plt.figure(**kwargs)
+
+        if ax is None:
+            ax = fig.add_subplot(111)
+
+        if log:
+            ax.semilogy()
+
+        if hline:
+            ax.axhline(cutoff,
+                       linewidth=2,
+                       color='gray',
+                       linestyle='dashed',
+                       zorder=1)
+
+        if n_signal_pcs == n:
+            ax.scatter(range(n),
+                       s.isig[:n].data,
+                       **signal_fmt)
+        elif n_signal_pcs > 0:
+            ax.scatter(range(n_signal_pcs),
+                       s.isig[:n_signal_pcs].data,
+                       **signal_fmt)
+            ax.scatter(range(n_signal_pcs, n),
+                       s.isig[n_signal_pcs:n].data,
+                       **noise_fmt)
+        else:
+            ax.scatter(range(n),
+                       s.isig[:n].data,
+                       **noise_fmt)
+
+        if xaxis_type == 'index':
+            locs = ax.get_xticks()
+            if xaxis_labeling == 'ordinal':
+                ax.set_xticklabels([ordinal(int(i)) for i in locs])
+            else:
+                ax.set_xticklabels([int(i) for i in locs])
+
+        if xaxis_type == 'number':
+            locs = ax.get_xticks()
+            if xaxis_labeling == 'ordinal':
+                ax.set_xticklabels([ordinal(int(i + 1)) for i in locs])
+            else:
+                ax.set_xticklabels([int(i + 1) for i in locs])
+
+        ax.set_ylabel(axes_titles['y'])
+        ax.set_xlabel(axes_titles['x'])
         ax.margins(0.05)
         ax.autoscale()
-        ax.lines[0].set_marker("o")
-        ax.lines[0].set_linestyle("None")
-        if log is True:
-            ax.semilogy()
+        ax.set_title(s.metadata.General.title, y=1.01)
+
         return ax
 
     def plot_cumulative_explained_variance_ratio(self, n=50):
@@ -1094,12 +1305,15 @@ class LearningResults(object):
         if hasattr(self, 'output_dimension') and self.output_dimension \
                 is not None:
             self.output_dimension = int(self.output_dimension)
-        self.summary()
+        _logger.info(self._summary())
 
     def summary(self):
         """Prints a summary of the decomposition and demixing parameters
          to the stdout
         """
+        print(self._summary())
+
+    def _summary(self):
         summary_str = (
             "Decomposition parameters:\n"
             "-------------------------\n\n" +
@@ -1115,7 +1329,7 @@ class LearningResults(object):
                 "------------------------\n" +
                 ("BSS algorithm : %s" % self.bss_algorithm) +
                 ("Number of components : %i" % len(self.unmixing_matrix)))
-        _logger.info(summary_str)
+        return summary_str
 
     def crop_decomposition_dimension(self, n):
         """

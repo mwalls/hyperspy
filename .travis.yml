@@ -1,36 +1,79 @@
 language: python
 
-sudo: false
-
-python:
-  - 3.5
-
-env:
-  - export FAIL_ON_EXTERNAL_DEPRECATION='False'
-  - export FAIL_ON_EXTERNAL_DEPRECATION='True'
-
 matrix:
+  include:
+  - python: 3.5
+    env: export FAIL_ON_EXTERNAL_DEPRECATION='False'; MINIMAL_ENV='False'
+  - python: 3.5
+    env: export FAIL_ON_EXTERNAL_DEPRECATION='True'; MINIMAL_ENV='False'
+  - python: 3.5
+    env: export FAIL_ON_EXTERNAL_DEPRECATION='False'; MINIMAL_ENV='True'
+  - os: osx
+    language: generic
+    python: 3.5
+    env: export FAIL_ON_EXTERNAL_DEPRECATION='False'; MINIMAL_ENV='False'
   allow_failures:
-    - env: export FAIL_ON_EXTERNAL_DEPRECATION='True'
+  - env: export FAIL_ON_EXTERNAL_DEPRECATION='True'; MINIMAL_ENV='False'
 
 before_install:
-  # Does not matter which miniconda we get, we still create a virtualenv
-  - wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh
-  - chmod +x miniconda.sh
-  - bash miniconda.sh -b -p $HOME/miniconda
-  - export PATH="$HOME/miniconda/bin:$PATH"
-  - hash -r
-  # miniconda is not always up-to-date with conda.
-  - conda update --yes conda
-
+  - if [[ $TRAVIS_OS_NAME == 'osx' ]] ; then
+      curl "https://repo.continuum.io/miniconda/Miniconda3-latest-MacOSX-x86_64.sh" -o miniconda.sh;
+    else wget https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh;
+    fi
+  - if [[ $MINIMAL_ENV == 'False' ]] ; then
+      chmod +x miniconda.sh;
+      ./miniconda.sh -b -p $HOME/miniconda;
+      export "PATH=$HOME/miniconda/bin:$PATH";
+      hash -r;
+      conda update --yes conda;
+    fi
 install:
-  - DEPS="nose numpy scipy matplotlib ipython h5py sympy scikit-learn dill natsort mock setuptools"
-  - conda create -n testenv --yes python=$TRAVIS_PYTHON_VERSION $DEPS
-  - source activate testenv
-  - conda install pip
-  - pip install coverage coveralls traits traitsui request
-  - python setup.py install
 
-script: python continuous_integration/nosetest.py --with-coverage hyperspy
+  - if [[ $MINIMAL_ENV == 'False' ]] ; then
+      DEPS="pytest pytest-cov numpy scipy matplotlib ipython h5py sympy scikit-learn dill natsort setuptools scikit-image cython lxml ipyparallel dask";
+      conda create -n testenv --yes $DEPS;
+      source activate testenv;
+      conda install pip;
+      python setup.py install;
+      pip install pytest pytest-xdist;
+    else pip install pytest;
+    pip3 install .;
+    fi
+
+script:
+  - if [[ $MINIMAL_ENV == 'False' ]]; then
+      python setup.py build_ext --inplace;
+      pip install coverage coveralls pytest-cov;
+      py.test --cov=hyperspy --pyargs hyperspy;
+    else python3 setup.py build_ext --inplace;
+      echo "available installed python libraries (pip3 list):"
+      pip3 list;
+      pip3 install coverage coveralls pytest-cov;
+      py.test --cov=hyperspy --pyargs hyperspy.tests;
+    fi
+
 after_success:
-    coveralls
+- coveralls
+- if [[ $MINIMAL_ENV == 'False' ]]; then
+    if [[ $TRAVIS_OS_NAME == 'osx' ]]; then
+      python setup.py bdist_wheel;
+    else python setup.py sdist;
+    fi;
+  fi
+
+before_deploy:
+- if [[ $TRAVIS_OS_NAME == 'osx' ]]; then
+    export DISTRIB=$(ls ./dist/*.whl);
+  else export DISTRIB=$(ls ./dist/*.tar.gz);
+  fi
+
+deploy:
+  provider: releases
+  api_key:
+    #francisco-dlp:
+    secure: dTt5L3HsIrfTOvnU8QFqwMu+Ghpuzp+vr0y7skRbqdFBCmPfjbAe2l24haMidVC1x0ZikHGgv9krEd/aKEBLi6QM+E2KsxiXUJWlhTFMH5o8qsMTBSAS2ChfQ32Jlktg8oK0FMs+UO6EFbMz1cr7m1Fgc0Ikds1ZCzev6Uke2Zk=
+  file: "${DISTRIB}"
+  skip_cleanup: true
+  on:
+    tags: true
+    condition: $MINIMAL_ENV = 'False'

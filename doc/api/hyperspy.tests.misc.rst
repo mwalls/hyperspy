@@ -12,6 +12,14 @@ hyperspy.tests.misc.test_arraytools module
     :undoc-members:
     :show-inheritance:
 
+hyperspy.tests.misc.test_date_time_tools module
+-----------------------------------------------
+
+.. automodule:: hyperspy.tests.misc.test_date_time_tools
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
 hyperspy.tests.misc.test_image_tools module
 -------------------------------------------
 

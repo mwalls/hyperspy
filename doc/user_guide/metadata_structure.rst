@@ -4,8 +4,8 @@
 Metadata structure
 ******************
 
-The :class:`~.signal.Signal` class stores metadata in the
-:attr:`~.signal.Signal.metadata` attribute that has a tree structure. By
+The :class:`~.signal.BaseSignal` class stores metadata in the
+:attr:`~.signal.BaseSignal.metadata` attribute that has a tree structure. By
 convention, the nodes labels are capitalized and the leaves are not
 capitalized.
 
@@ -30,6 +30,7 @@ in the following sections of this chapter.
     │   │   ├── beam_current (nA)
     │   │   ├── beam_energy (keV)
     │   │   ├── convergence_angle (mrad)
+    │   │   ├── magnification
     │   │   ├── microscope
     │   │   └── tilt_stage (º)
     │   └── TEM
@@ -41,22 +42,35 @@ in the following sections of this chapter.
     │       │   │   ├── live_time (s)
     │       │   │   └── real_time (s)
     │       │   └── EELS
+    │       │       ├── aperture (mm)
     │       │       ├── collection_angle (mrad)
     │       │       ├── dwell_time (s)
     │       │       ├── exposure (s)
+    │       │       ├── frame_number
     │       │       └── spectrometer
+    │       ├── Biprism
+    │       │   ├── azimuth_angle (º)
+    │       │   ├── position
+    │       │   └── voltage (V)
     │       ├── acquisition_mode
     │       ├── beam_current (nA)
     │       ├── beam_energy (keV)
+    │       ├── camera_length (mm)
     │       ├── convergence_angle (mrad)
+    │       ├── magnification
     │       ├── microscope
     │       └── tilt_stage (º)
     ├── General
+    │   ├── authors
     │   ├── date
+    │   ├── doi
     │   ├── original_filename
+    │   ├── notes
     │   ├── time
+    │   ├── time_zone
     │   └── title
     ├── Sample
+    │   ├── credits
     │   ├── description
     │   ├── elements
     │   ├── thickness
@@ -70,7 +84,7 @@ in the following sections of this chapter.
         │   │   └── parameters_estimation_method
         │   └── variance
         ├── binned
-        ├── record_by
+        ├── quantity
         ├── signal_type
         └── signal_origin
 
@@ -88,16 +102,36 @@ original_filename
     If the signal was loaded from a file this key stores the name of the
     original file.
 
-time
-    type: datetime.time
+time_zone
+    type: Str
 
-    The acquistion or creation time.
+    The time zone as supported by the python-dateutil library, e.g. "UTC", "Europe/London", etc. It can also be a time offset, e.g. "+03:00" or "-05:00".
+
+time
+    type: Str
+
+    The acquisition or creation time in ISO 8601 time format.
 
 date
-    type: datetime.time
+    type: Str
 
-    The acquistion or creation date.
+    The acquisition or creation date in ISO 8601 date format
 
+
+authors
+    type: Str
+
+    The authors of the data, in Latex format: Surname1, Name1 and Surname2, Name2, etc.
+
+doi
+    type: Str
+
+    Digital object identifier of the data, e. g. doi:10.5281/zenodo.58841.
+
+notes
+    type: Str
+
+    Notes about the data.
 
 Acquisition_instrument
 ======================
@@ -116,6 +150,11 @@ acquisition_mode
     type: Str
 
     Either 'TEM' or 'STEM'
+
+camera_length
+    type: Float
+
+    The camera length in mm.
 
 convergence_angle
     type: Float
@@ -140,7 +179,12 @@ dwell_time
 exposure
     type: Float
 
-    The exposure time in seconds. This is relevant for TEM acquistion.
+    The exposure time in seconds. This is relevant for TEM acquisition.
+
+magnification
+    type: Float
+
+    The magnification.
 
 tilt_stage
     type: Float
@@ -172,6 +216,10 @@ beam_current
 
     The beam current in nA.
 
+magnification
+    type: Float
+
+    The magnification.
 
 tilt_stage
     type: Float
@@ -191,10 +239,10 @@ EELS
 This node stores parameters relevant to electron energy loss spectroscopy
 signals.
 
-spectrometer
-    type: Str
+aperture_size
+    type: Float
 
-    The spectrometer model, e.g. Gatan 666
+    The entrance aperture size of the spectrometer in mm.
 
 collection_angle
     type: Float
@@ -209,8 +257,17 @@ dwell_time
 exposure
     type: Float
 
-    The exposure time in seconds. This is relevant for TEM acquistion.
+    The exposure time in seconds. This is relevant for TEM acquisition.
 
+frame_number
+    type: int
+
+    The number of frames/spectra integrated during the acquisition.
+
+spectrometer
+    type: Str
+
+    The spectrometer model, e.g. Gatan Enfinium ER (Model 977).
 
 EDS
 ^^^
@@ -249,8 +306,33 @@ live_time
     The time spent to record the spectrum in second, compensated for the
     dead time of the detector.
 
+Biprism
+-------
+
+This node stores parameters of biprism used in off-axis electron holography
+
+azimuth_angle (º)
+    type: Float
+
+    Rotation angle of the biprism in degree
+
+position
+    type: Str
+
+    Position of the biprism in microscope column, e.g. Selected area aperture plane
+
+voltage
+    type: Float
+
+    Voltage of electrostatic biprism in volts
+
 Sample
 ======
+
+credits
+    type: Str
+
+    Acknowledgment of sample supplier, e.g. Prepared by Putin, Vladimir V.
 
 description
     type: Str
@@ -292,23 +374,29 @@ signal_type
 signal_origin
     type: Str
 
-    Either 'simulation' or 'experiment'.
+    Describes the origin of the signal e.g. 'simulation' or 'experiment'.
 
 record_by
     type: Str
+    .. deprecated:: 2.1 (HyperSpy v1.0)
 
     One of 'spectrum' or 'image'. It describes how the data is stored in memory.
     If 'spectrum' the spectral data is stored in the faster index.
+
+quantity
+    type: Str
+
+    The name of the quantity of the "intensity axis" with the units in round brackets if required, for example Temperature (K).
 
 Noise_properties
 ----------------
 
 variance
-    type: float or Signal instance.
+    type: float or BaseSignal instance.
 
     The variance of the data. It can be a float when the noise is Gaussian or a
-    :class:`~.signal.Signal` instance if the noise is heteroscedastic, in which
-    case it must have the same dimensions as :attr:`~.signal.Signal.data`.
+    :class:`~.signal.BaseSignal` instance if the noise is heteroscedastic, in which
+    case it must have the same dimensions as :attr:`~.signal.BaseSignal.data`.
 
 Variance_linear_model
 ^^^^^^^^^^^^^^^^^^^^^
@@ -332,14 +420,14 @@ _Internal_parameters
 ====================
 
 This node is "private" and therefore is not displayed when printing the
-:attr:`~.signal.Signal.metadata` attribute. For example, an "energy" leaf
+:attr:`~.signal.BaseSignal.metadata` attribute. For example, an "energy" leaf
 should be accompanied by an "energy_units" leaf.
 
 Stacking_history
 ----------------
 
 Generated when using :py:meth:`~.utils.stack`. Used by
-:py:meth:`~.signal.Signal.split`, to retrieve the former list of signal.
+:py:meth:`~.signal.BaseSignal.split`, to retrieve the former list of signal.
 
 step_sizes
     type: list of int

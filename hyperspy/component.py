@@ -17,12 +17,14 @@
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
 import os
-
-import numpy as np
+import functools
 import warnings
 
+import numpy as np
 import traits.api as t
 from traits.trait_numeric import Array
+import sympy
+from sympy.utilities.lambdify import lambdify
 
 from hyperspy.defaults_parser import preferences
 from hyperspy.misc.utils import slugify
@@ -32,7 +34,6 @@ from hyperspy.exceptions import NavigationDimensionError
 from hyperspy.misc.export_dictionary import export_to_dictionary, \
     load_from_dictionary
 from hyperspy.events import Events, Event
-from hyperspy.exceptions import VisibleDeprecationWarning
 
 import logging
 
@@ -66,14 +67,29 @@ class Parameter(t.HasTraits):
         If it is not None, the value of the current parameter is
         a function of the given Parameter. The function is by default
         the identity function, but it can be defined by twin_function
+    twin_function_expr: str
+        Expression of the ``twin_function`` that enables setting a functional
+        relationship between the parameter and its twin. If ``twin`` is not
+        ``None``, the parameter value is calculated as the output of calling the
+        twin function with the value of the twin parameter. The string is
+        parsed using sympy, so permitted values are any valid sympy expressions
+        of one variable. If the function is invertible the twin inverse function
+        is set automatically.
+    twin_inverse_function : str
+        Expression of the ``twin_inverse_function`` that enables setting the
+        value of the twin parameter. If ``twin`` is not
+        ``None``, its value is set to the output of calling the
+        twin inverse function with the value provided. The string is
+        parsed using sympy, so permitted values are any valid sympy expressions
+        of one variable.
     twin_function : function
-        Function that, if selt.twin is not None, takes self.twin.value
-        as its only argument and returns a float or array that is
-        returned when getting Parameter.value
+        **Setting this attribute manually
+        is deprecated in HyperSpy newer than 1.1.2. It will become private in
+        HyperSpy 2.0. Please use ``twin_function_expr`` instead.**
     twin_inverse_function : function
-        The inverse of twin_function. If it is None then it is not
-        possible to set the value of the parameter twin by setting
-        the value of the current parameter.
+        **Setting this attribute manually
+        is deprecated in HyperSpy newer than 1.1.2. It will become private in
+        HyperSpy 2.0. Please use ``twin_inverse_function_expr`` instead.**
     ext_force_positive : bool
         If True, the parameter value is set to be the absolute value
         of the input value i.e. if we set Parameter.value = -3, the
@@ -117,6 +133,10 @@ class Parameter(t.HasTraits):
 
     bmin = t.Property(NoneFloat(), label="Lower bounds")
     bmax = t.Property(NoneFloat(), label="Upper bounds")
+    _twin_function_expr = ""
+    _twin_inverse_function_expr = ""
+    twin_function = None
+    _twin_inverse_function = None
 
     def __init__(self):
         self._twins = set()
@@ -134,8 +154,6 @@ class Parameter(t.HasTraits):
             value : {float | array}
                 The new value of the parameter
             """, arguments=["obj", 'value'])
-        self.twin_function = lambda x: x
-        self.twin_inverse_function = lambda x: x
         self.std = None
         self.component = None
         self.grad = None
@@ -153,9 +171,9 @@ class Parameter(t.HasTraits):
                            'ext_bounded': None,
                            'name': None,
                            'ext_force_positive': None,
+                           'twin_function_expr': None,
+                           'twin_inverse_function_expr': None,
                            'self': ('id', None),
-                           'twin_function': ('fn', None),
-                           'twin_inverse_function': ('fn', None),
                            }
         self._slicing_whitelist = {'map': 'inav'}
 
@@ -199,27 +217,85 @@ class Parameter(t.HasTraits):
     def __len__(self):
         return self._number_of_elements
 
-    def connect(self, f):
-        warnings.warn(
-            "The method `Parameter.connect()` has been deprecated and will be "
-            "removed in HyperSpy 0.10. Please use "
-            "`Parameter.events.value_changed.connect()` instead.",
-            VisibleDeprecationWarning)
-        self.events.value_changed.connect(f, [])
+    @property
+    def twin_function_expr(self):
+        return self._twin_function_expr
 
-    def disconnect(self, f):
-        warnings.warn(
-            "The method `Parameter.disconnect()` has been deprecated and will "
-            "be removed in HyperSpy 0.10. Please use "
-            "`Parameter.events.value_changed.disconnect()` instead.",
-            VisibleDeprecationWarning)
-        self.events.value_changed.disconnect(f)
+    @twin_function_expr.setter
+    def twin_function_expr(self, value):
+        if not value:
+            self.twin_function = None
+            self.twin_inverse_function = None
+            self._twin_function_expr = ""
+            self._twin_inverse_sympy = None
+            return
+        expr = sympy.sympify(value)
+        if len(expr.free_symbols) > 1:
+            raise ValueError("The expression must contain only one variable.")
+        elif len(expr.free_symbols) == 0:
+            raise ValueError("The expression must contain one variable, "
+                             "it contains none.")
+        x = tuple(expr.free_symbols)[0]
+        self.twin_function = lambdify(x, expr.evalf())
+        self._twin_function_expr = value
+        y = sympy.Symbol(x.name + "2")
+        try:
+            inv = sympy.solveset(sympy.Eq(y, expr), x)
+            self._twin_inverse_sympy = lambdify(y, inv)
+            self._twin_inverse_function = None
+        except:
+            # Not all may have a suitable solution.
+            self._twin_inverse_function = None
+            self._twin_inverse_sympy = None
+            _logger.warning(
+                "The function {} is not invertible. Setting the value of {} "
+                "will raise an AttributeError unless you set manually "
+                "``twin_inverse_function_expr``. Otherwise, set the value of "
+                "its twin parameter instead.".format(value, self))
+
+    @property
+    def twin_inverse_function_expr(self):
+        if self.twin:
+            return self._twin_inverse_function_expr
+        else:
+            return ""
+
+    @twin_inverse_function_expr.setter
+    def twin_inverse_function_expr(self, value):
+        if not value:
+            self.twin_inverse_function = None
+            self._twin_inverse_function_expr = ""
+            return
+        expr = sympy.sympify(value)
+        if len(expr.free_symbols) > 1:
+            raise ValueError("The expression must contain only one variable.")
+        elif len(expr.free_symbols) == 0:
+            raise ValueError("The expression must contain one variable, "
+                             "it contains none.")
+        x = tuple(expr.free_symbols)[0]
+        self._twin_inverse_function = lambdify(x, expr.evalf())
+        self._twin_inverse_function_expr = value
+
+    @property
+    def twin_inverse_function(self):
+        if (not self.twin_inverse_function_expr and
+                self.twin_function_expr and self._twin_inverse_sympy):
+            return lambda x: self._twin_inverse_sympy(x).pop()
+        else:
+            return self._twin_inverse_function
+
+    @twin_inverse_function.setter
+    def twin_inverse_function(self, value):
+        self._twin_inverse_function = value
 
     def _get_value(self):
         if self.twin is None:
             return self.__value
         else:
-            return self.twin_function(self.twin.value)
+            if self.twin_function:
+                return self.twin_function(self.twin.value)
+            else:
+                return self.twin.value
 
     def _set_value(self, value):
         try:
@@ -241,9 +317,17 @@ class Parameter(t.HasTraits):
         old_value = self.__value
 
         if self.twin is not None:
-            if self.twin_inverse_function is not None:
-                self.twin.value = self.twin_inverse_function(value)
-            return
+            if self.twin_function is not None:
+                if self.twin_inverse_function is not None:
+                    self.twin.value = self.twin_inverse_function(value)
+                    return
+                else:
+                    raise AttributeError(
+                        "This parameter has a ``twin_function`` but"
+                        "its ``twin_inverse_function`` is not defined.")
+            else:
+                self.twin.value = value
+                return
 
         if self.ext_bounded is False:
             self.__value = value
@@ -491,12 +575,10 @@ class Parameter(t.HasTraits):
         NavigationDimensionError : if the navigation dimension is 0
 
         """
-        from hyperspy.signal import Signal
-        if self._axes_manager.navigation_dimension == 0:
-            raise NavigationDimensionError(0, '>0')
+        from hyperspy.signal import BaseSignal
 
-        s = Signal(data=self.map[field],
-                   axes=self._axes_manager._get_navigation_axes_dicts())
+        s = BaseSignal(data=self.map[field],
+                       axes=self._axes_manager._get_navigation_axes_dicts())
         if self.component is not None and \
                 self.component.active_is_multidimensional:
             s.data[np.logical_not(self.component._active_array)] = np.nan
@@ -512,10 +594,34 @@ class Parameter(t.HasTraits):
                 size=self._number_of_elements,
                 name=self.name,
                 navigate=True)
+        s._assign_subclass()
+        if field == "values":
+            # Add the variance if available
+            std = self.as_signal(field="std")
+            if not np.isnan(std.data).all():
+                std.data = std.data ** 2
+                std.metadata.General.title = "Variance"
+                s.metadata.set_item(
+                    "Signal.Noise_properties.variance", std)
         return s
 
-    def plot(self):
-        self.as_signal().plot()
+    def plot(self, **kwargs):
+        """Plot parameter signal.
+
+        Parameters
+        ----------
+        **kwargs
+            Any extra keyword arguments are passed to the signal plot.
+
+        Example
+        -------
+        >>> parameter.plot() #doctest: +SKIP
+
+        Set the minimum and maximum displayed values
+
+        >>> parameter.plot(vmin=0, vmax=1) #doctest: +SKIP
+        """
+        self.as_signal().plot(**kwargs)
 
     def export(self, folder=None, name=None, format=None,
                save_std=False):
@@ -596,6 +702,118 @@ class Parameter(t.HasTraits):
         view = View(editable_traits, buttons=['OK', 'Cancel'])
         return view
 
+    def _interactive_slider_bounds(self, index=None):
+        """Guesstimates the bounds for the slider. They will probably have to
+        be changed later by the user.
+        """
+        fraction = 10.
+        _min, _max, step = None, None, None
+        value = self.value if index is None else self.value[index]
+        if self.bmin is not None:
+            _min = self.bmin
+        if self.bmax is not None:
+            _max = self.bmax
+        if _max is None and _min is not None:
+            _max = value + fraction * (value - _min)
+        if _min is None and _max is not None:
+            _min = value - fraction * (_max - value)
+        if _min is None and _max is None:
+            if self is self.component._position:
+                axis = self._axes_manager.signal_axes[-1]
+                _min = axis.axis.min()
+                _max = axis.axis.max()
+                step = np.abs(axis.scale)
+            else:
+                _max = value + np.abs(value * fraction)
+                _min = value - np.abs(value * fraction)
+        if step is None:
+            step = (_max - _min) * 0.001
+        return {'min': _min, 'max': _max, 'step': step}
+
+    def _interactive_update(self, value=None, index=None):
+        """Callback function for the widgets, to update the value
+        """
+        if value is not None:
+            if index is None:
+                self.value = value['new']
+            else:
+                self.value = self.value[:index] + (value['new'],) +\
+                    self.value[index + 1:]
+
+    def notebook_interaction(self, display=True):
+        """Creates interactive notebook widgets for the parameter, if
+        available.
+        Requires `ipywidgets` to be installed.
+        Parameters
+        ----------
+        display : bool
+            if True (default), attempts to display the parameter widget.
+            Otherwise returns the formatted widget object.
+        """
+        from ipywidgets import VBox
+        from traitlets import TraitError as TraitletError
+        from IPython.display import display as ip_display
+        try:
+            if self._number_of_elements == 1:
+                container = self._create_notebook_widget()
+            else:
+                children = [self._create_notebook_widget(index=i) for i in
+                            range(self._number_of_elements)]
+                container = VBox(children)
+            if not display:
+                return container
+            ip_display(container)
+        except TraitletError:
+            if display:
+                _logger.info('This function is only avialable when running in'
+                             ' a notebook')
+            else:
+                raise
+
+    def _create_notebook_widget(self, index=None):
+
+        from ipywidgets import (FloatSlider, FloatText, Layout, HBox)
+
+        widget_bounds = self._interactive_slider_bounds(index=index)
+        thismin = FloatText(value=widget_bounds['min'],
+                            description='min',
+                            layout=Layout(flex='0 1 auto',
+                                          width='auto'),)
+        thismax = FloatText(value=widget_bounds['max'],
+                            description='max',
+                            layout=Layout(flex='0 1 auto',
+                                          width='auto'),)
+        current_value = self.value if index is None else self.value[index]
+        current_name = self.name
+        if index is not None:
+            current_name += '_{}'.format(index)
+        widget = FloatSlider(value=current_value,
+                             min=thismin.value,
+                             max=thismax.value,
+                             step=widget_bounds['step'],
+                             description=current_name,
+                             layout=Layout(flex='1 1 auto', width='auto'))
+
+        def on_min_change(change):
+            if widget.max > change['new']:
+                widget.min = change['new']
+                widget.step = np.abs(widget.max - widget.min) * 0.001
+
+        def on_max_change(change):
+            if widget.min < change['new']:
+                widget.max = change['new']
+                widget.step = np.abs(widget.max - widget.min) * 0.001
+
+        thismin.observe(on_min_change, names='value')
+        thismax.observe(on_max_change, names='value')
+
+        this_observed = functools.partial(self._interactive_update,
+                                          index=index)
+
+        widget.observe(this_observed, names='value')
+        container = HBox((thismin, widget, thismax))
+        return container
+
 
 class Component(t.HasTraits):
     __axes_manager = None
@@ -638,6 +856,8 @@ class Component(t.HasTraits):
                            'active': None
                            }
         self._slicing_whitelist = {'_active_array': 'inav'}
+        self._slicing_order = ('active', 'active_is_multidimensional',
+                               '_active_array',)
 
     _name = ''
     _active_is_multidimensional = False
@@ -659,9 +879,7 @@ class Component(t.HasTraits):
 
         if value:  # Turn on
             if self._axes_manager.navigation_size < 2:
-                warnings.warn(
-                    '`navigation_size` < 2, skipping',
-                    RuntimeWarning)
+                _logger.warning('`navigation_size` < 2, skipping')
                 return
             # Store value at current position
             self._create_active_array()
@@ -704,22 +922,6 @@ class Component(t.HasTraits):
             parameter._axes_manager = value
         self.__axes_manager = value
 
-    def connect(self, f):
-        warnings.warn(
-            "The method `Component.connect()` has been deprecated and will be "
-            "removed in HyperSpy 0.10. Please use "
-            "`Component.events.active_changed.connect()` instead.",
-            VisibleDeprecationWarning)
-        self.events.active_changed.connect(f, [])
-
-    def disconnect(self, f):
-        warnings.warn(
-            "The method `Component.disconnect()` has been deprecated and will "
-            "be removed in HyperSpy 0.10. Please use "
-            "`Component.events.active_changed.disconnect()` instead.",
-            VisibleDeprecationWarning)
-        self.events.active_changed.disconnect(f)
-
     def _get_active(self):
         if self.active_is_multidimensional is True:
             # The following should set
@@ -736,7 +938,6 @@ class Component(t.HasTraits):
         self._active = arg
         if self.active_is_multidimensional is True:
             self._store_active_value_in_array(arg)
-
         self.events.active_changed.trigger(active=self._active, obj=self)
         self.trait_property_changed('active', old_value, self._active)
 
@@ -806,6 +1007,8 @@ class Component(t.HasTraits):
             shape = [1, ]
         if (not isinstance(self._active_array, np.ndarray)
                 or self._active_array.shape != shape):
+            _logger.debug('Creating _active_array for {}.\n\tCurrent array '
+                          'is:\n{}'.format(self, self._active_array))
             self._active_array = np.ones(shape, dtype=bool)
 
     def _create_arrays(self):
@@ -928,8 +1131,11 @@ class Component(t.HasTraits):
         s = self.__call__()
         if not self.active:
             s.fill(np.nan)
-        if self.model.spectrum.metadata.Signal.binned is True:
-            s *= self.model.spectrum.axes_manager.signal_axes[0].scale
+        if self.model.signal.metadata.Signal.binned is True:
+            s *= self.model.signal.axes_manager.signal_axes[0].scale
+        if old_axes_manager is not None:
+            self.model.axes_manager = old_axes_manager
+            self.charge()
         if out_of_range2nans is True:
             ns = np.empty(self.model.axis.axis.shape)
             ns.fill(np.nan)
@@ -953,7 +1159,7 @@ class Component(t.HasTraits):
 
         Examples
         --------
-        >>> v1 = hs.model.components.Voigt()
+        >>> v1 = hs.model.components1D.Voigt()
         >>> v1.set_parameters_free()
         >>> v1.set_parameters_free(parameter_name_list=['area','centre'])
 
@@ -988,7 +1194,7 @@ class Component(t.HasTraits):
 
         Examples
         --------
-        >>> v1 = hs.model.components.Voigt()
+        >>> v1 = hs.model.components1D.Voigt()
         >>> v1.set_parameters_not_free()
         >>> v1.set_parameters_not_free(parameter_name_list=['area','centre'])
 
@@ -1017,16 +1223,13 @@ class Component(t.HasTraits):
 
     def as_dictionary(self, fullcopy=True):
         """Returns component as a dictionary
-
         For more information on method and conventions, see
         :meth:`hyperspy.misc.export_dictionary.export_to_dictionary`
-
         Parameters
         ----------
         fullcopy : Bool (optional, False)
             Copies of objects are stored, not references. If any found,
             functions will be pickled and signals converted to dictionaries
-
         Returns
         -------
         dic : dictionary
@@ -1047,7 +1250,6 @@ class Component(t.HasTraits):
 
     def _load_dictionary(self, dic):
         """Load data from dictionary.
-
         Parameters
         ----------
         dict : dictionary
@@ -1063,14 +1265,12 @@ class Component(t.HasTraits):
                 component attributes.  For more information see
                 :meth:`hyperspy.misc.export_dictionary.load_from_dictionary`
             * any field from _whitelist.keys() *
-
         Returns
         -------
         twin_dict : dictionary
             Dictionary of 'id' values from input dictionary as keys with all of
             the parameters of the component, to be later used for setting up
             correct twins.
-
         """
         if dic['_id_name'] == self._id_name:
             id_dict = {}
@@ -1089,4 +1289,36 @@ class Component(t.HasTraits):
             raise ValueError( "_id_name of component and dictionary do not match, \ncomponent._id_name = %s\
                     \ndictionary['_id_name'] = %s" % (self._id_name, dic['_id_name']))
 
-# vim: textwidth=80
+    def notebook_interaction(self, display=True):
+        """Creates interactive notebook widgets for all component parameters,
+        if available.
+        Requires `ipywidgets` to be installed.
+        Parameters
+        ----------
+        display : bool
+            if True (default), attempts to display the widgets.
+            Otherwise returns the formatted widget object.
+        """
+        from ipywidgets import (Checkbox, VBox)
+        from traitlets import TraitError as TraitletError
+        from IPython.display import display as ip_display
+        try:
+            active = Checkbox(description='active', value=self.active)
+
+            def on_active_change(change):
+                self.active = change['new']
+            active.observe(on_active_change, names='value')
+
+            container = VBox([active])
+            for parameter in self.parameters:
+                container.children += parameter.notebook_interaction(False),
+
+            if not display:
+                return container
+            ip_display(container)
+        except TraitletError:
+            if display:
+                _logger.info('This function is only avialable when running in'
+                             ' a notebook')
+            else:
+                raise

@@ -19,6 +19,7 @@
 import math
 
 import numpy as np
+import dask.array as da
 
 from hyperspy.component import Component
 
@@ -39,18 +40,30 @@ def _estimate_gaussian_parameters(signal, x1, x2, only_current):
         i = axis.index_in_array
         data_gi = [slice(None), ] * len(signal.data.shape)
         data_gi[axis.index_in_array] = slice(i1, i2)
-        data = signal.data[data_gi]
+        data = signal.data[tuple(data_gi)]
         X_shape = [1, ] * len(signal.data.shape)
         X_shape[axis.index_in_array] = data.shape[i]
         centre_shape = list(data.shape)
         centre_shape[i] = 1
 
-    centre = np.sum(X.reshape(X_shape) * data, i) / np.sum(data, i)
+    if isinstance(data, da.Array):
+        _sum = da.sum
+        _sqrt = da.sqrt
+        _abs = da.numpy_compat.builtins.abs
+    else:
+        _sum = np.sum
+        _sqrt = np.sqrt
+        _abs = np.abs
 
-    sigma = np.sqrt(np.abs(np.sum((X.reshape(X_shape) - centre.reshape(
-        centre_shape)) ** 2 * data, i) / np.sum(data, i)))
+    centre = _sum(X.reshape(X_shape) * data, i) / _sum(data, i)
+
+    sigma = _sqrt(_abs(_sum((X.reshape(X_shape) - centre.reshape(
+        centre_shape)) ** 2 * data, i) / _sum(data, i)))
     height = data.max(i)
-    return centre, height, sigma
+    if isinstance(data, da.Array):
+        return da.compute(centre, height, sigma)
+    else:
+        return centre, height, sigma
 
 
 class Gaussian(Component):
@@ -130,7 +143,7 @@ class Gaussian(Component):
 
         Parameters
         ----------
-        signal : Signal instance
+        signal : Signal1D instance
         x1 : float
             Defines the left limit of the spectral range to use for the
             estimation.
@@ -152,11 +165,11 @@ class Gaussian(Component):
         Examples
         --------
 
-        >>> g = hs.model.components.Gaussian()
+        >>> g = hs.model.components1D.Gaussian()
         >>> x = np.arange(-10, 10, 0.01)
         >>> data = np.zeros((32, 32, 2000))
         >>> data[:] = g.function(x).reshape((1, 1, 2000))
-        >>> s = hs.signals.Spectrum(data)
+        >>> s = hs.signals.Signal1D(data)
         >>> s.axes_manager._axes[-1].offset = -10
         >>> s.axes_manager._axes[-1].scale = 0.01
         >>> g.estimate_parameters(s, -10, 10, False)

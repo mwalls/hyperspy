@@ -20,9 +20,11 @@
 import logging
 
 from hyperspy.io_plugins import (msa, digital_micrograph, fei, mrc, ripple,
-                                 tiff, semper_unf, blockfile, dens)
+                                 tiff, semper_unf, blockfile, dens, emd,
+                                 protochips, edax)
+
 io_plugins = [msa, digital_micrograph, fei, mrc, ripple, tiff, semper_unf,
-              blockfile, dens]
+              blockfile, dens, emd, protochips, edax]
 
 _logger = logging.getLogger(__name__)
 
@@ -37,6 +39,8 @@ except ImportError:
 try:
     from hyperspy.io_plugins import hdf5
     io_plugins.append(hdf5)
+    from hyperspy.io_plugins import emd
+    io_plugins.append(emd)
 except ImportError:
     _logger.warning('The HDF5 IO features are not available. '
                     'It is highly reccomended to install h5py')
@@ -45,7 +49,15 @@ try:
     from hyperspy.io_plugins import image
     io_plugins.append(image)
 except ImportError:
-    _logger.info('The Image (PIL) IO features are not available')
+    _logger.info('The Signal2D (PIL) IO features are not available')
+
+try:
+    from hyperspy.io_plugins import bcf
+    io_plugins.append(bcf)
+except ImportError:
+    _logger.warning('The Bruker composite file reader can not be loaded '
+                    'because the lxml library is not installed. To enable it '
+                    'install the Python lxml package.')
 
 default_write_ext = set()
 for plugin in io_plugins:

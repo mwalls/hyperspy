@@ -1,7 +1,10 @@
-﻿Developer Guide
+﻿
+.. _dev_guide-label:
+
+Developer Guide
 ===============
 
-This 5-step guide is intended to give people who want to start contributing their 
+This 6-step guide is intended to give people who want to start contributing their 
 own tools to HyperSpy a foothold to kick-start the process. This is also the way
 to start if you ultimately hope to become a member of the developer team.
 
@@ -127,7 +130,7 @@ thing has it's own branch! You can merge some together for your personal use.
 
 Diagramatically you should be aiming for something like this:
 
-.. figure:: /user_guide/images/branching_schematic.eps1
+.. figure:: /user_guide/images/branching_schematic.eps
 
 
 Get the style right
@@ -147,7 +150,9 @@ Tests -- these are short functions found in hyperspy/tests that call your functi
 under some known conditions and check the outputs against known values. They should
 depend on as few other features as possible so that when they break we know exactly
 what caused it. Writing tests can seem laborious but you'll probaby soon find that
-they're very important as they force you to sanity check all you do.
+they're very important as they force you to sanity check all you do. When comparing
+integers, it's fine to use ``==``. When comparing floats, be sure to use
+``assert_almost_equal()``.
 
 Documentation comes in two parts docstrings and user-guide documentation.
 
@@ -164,3 +169,78 @@ to use it with examples and links to the relevant code.
 When you've got a branch that's ready to be incorporated in to the main code of
 HyperSpy -- make a pull request on GitHub and wait for it to be reviewed and
 discussed.
+
+6. Contributing cython code
+---------------------------
+
+Python is not the fastest language, and can be particularly slow in loops.
+Performance can sometimes be significantly improved by implementing optional cython
+code alongside the pure Python versions. While developing cython code, make use of
+the official cython recommendations (http://docs.cython.org/).
+Add your cython extensions to the setup.py, in the existing list of ``raw_extensions``.
+
+Unlike the cython recommendation, the cythonized .c or .cpp files are not welcome
+in the git source repository (except original c or c++ files), since they are typically
+quite large. Cythonization will take place during Travis CI and Appveyor building.
+The cythonized code will be generated and included in source or binary distributions
+for end users. To help troubleshoot potential deprecation with future cython releases,
+add a comment with in the header of your .pyx files with the cython version.
+If cython is present in the build environment and any cythonized c/c++ file is missing,
+then setup.py tries to cythonize all extensions automatically.
+
+To make the development easier the new command ``recythonize`` has been added to setup.py.
+It can be used in conjunction with other default commands.
+For example ``python setup.py recythonize build_ext --inplace``
+will recythonize all changed (and described in setup.py!) cython code and compile.
+
+When developing on git branches, the first time you call setup.py in conjunction with
+or without any other command - it will generate a post-checkout hook, which will include
+a potential cythonization and compilation product list (.c/.cpp/.so/.pyd). With your next
+``git checkout`` the hook will remove them and automatically run ``python setup.py build_ext --inplace``
+to cythonize and compile the code if available. If an older version of HyperSpy (<= 0.8.4.x)
+is checked out this should have no side effects.
+
+If another custom post-checkout hook is detected on PR, then setup.py tries to append
+or update the relevant part. To prevent unwanted hook generation or update you can create
+the empty file ``.hook_ignore`` in source directory (same level as setup.py).
+
+7. Adding new methods
+---------------------
+
+With the addition of the ``LazySignal`` class and its derivatives, adding
+methods that operate on the data becomes slightly more complicated. However, we
+have attempted to streamline it as much as possible. ``LazySignals`` use
+``dask.array.Array`` for the ``data`` field instead of the usual
+``numpy.ndarray``. The full documentation is available
+`here<https://dask.readthedocs.io/en/latest/array.html>`_. While interfaces of
+the two arrays are indeed almost identical, the most important differences are
+(``da`` being ``dask.array.Array`` in the examples):
+
+ - **Dask arrays are immutable**: ``da[3] = 2`` does not work. ``da += 2``
+   does, but it's actually a new object -- might as well use ``da = da + 2``
+   for a better distinction.
+ - **Unknown shapes are problematic**: ``res = da[da>0.3]`` works, but the
+   shape of the result depends on the values and cannot be inferred without
+   execution. Hence few operations can be run on ``res`` lazily, and it should
+   be avoided if possible.
+
+The easiest way to add new methods that work both with arbitrary navigation
+dimensions and ``LazySignals`` is by using the ``map`` (or, for more control,
+``_map_all`` or ``_map_iterate``) method to map your function ``func`` across
+all "navigation pixels" (e.g. spectra in a spectrum-image). ``map`` methods
+will run the function on all pixels efficiently and put the results back in the
+correct order. ``func`` is not constrained by ``dask`` and can use whatever
+code (assignment, etc.) you wish.
+
+If the new method cannot be coerced into a shape suitable ``map``, separate
+cases for lazy signals will have to be written. If a function operates on
+arbitrary-sized arrays and the shape of the output can be known before calling,
+``da.map_blocks`` and ``da.map_overlap`` are efficient and flexible.
+
+Finally, in addition to ``_iterate_signal`` that is available to all HyperSpy
+signals, lazy counterparts also have ``_block_iterator`` method that supports
+signal and navigation masking and yields (returns on subsequent calls) the
+underlying dask blocks as numpy arrays. It is important to note that stacking
+all (flat) blocks and reshaping the result into the initial data shape will not
+result in identical arrays. For illustration it is best to see the `dask
+documentation<https://dask.readthedocs.io/en/latest/array.html>`_.

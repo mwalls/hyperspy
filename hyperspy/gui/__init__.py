@@ -24,6 +24,7 @@ from traits.etsconfig.api import ETSConfig
 
 _logger = logging.getLogger(__name__)
 
+
 def set_ets_toolkit(toolkit):
     try:
         ETSConfig.toolkit = toolkit
@@ -41,3 +42,5 @@ elif "Qt" in backend:
     set_ets_toolkit("qt4")
 else:
     set_ets_toolkit("null")
+    from hyperspy.defaults_parser import preferences
+    preferences.General.interactive = False

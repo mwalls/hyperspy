@@ -16,15 +16,17 @@
 # You should have received a copy of the GNU General Public License
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
-from distutils.version import StrictVersion
+from distutils.version import LooseVersion
 import warnings
-import datetime
 import logging
+import datetime
+import ast
 
 import h5py
 import numpy as np
+import dask.array as da
 from traits.api import Undefined
-from hyperspy.misc.utils import ensure_unicode
+from hyperspy.misc.utils import ensure_unicode, multiply
 from hyperspy.axes import AxesManager
 
 _logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ default_extension = 4
 
 # Writing capabilities
 writes = True
-version = "2.0"
+version = "2.2"
 
 # -----------------------
 # File format description
@@ -72,14 +74,24 @@ version = "2.0"
 # the experiments and that will be accessible as attributes of the
 # Experiments instance
 #
-# New in v1.3
-# -----------
+# CHANGES
+#
+# v2.2
+# - store more metadata as string: date, time, notes, authors and doi
+# - store quantity for intensity axis
+#
+# v2.1
+# - Store the navigate attribute.
+# - record_by is stored only for backward compatibility but the axes navigate
+#   attribute takes precendence over record_by for files with version >= 2.1
+# v1.3
+# ----
 # - Added support for lists, tuples and binary strings
 
 not_valid_format = 'The file is not a valid HyperSpy hdf5 file'
 
 current_file_version = None  # Format version of the file being read
-default_version = StrictVersion(version)
+default_version = LooseVersion(version)
 
 
 def get_hspy_format_version(f):
@@ -97,12 +109,13 @@ def get_hspy_format_version(f):
         version = "2.0"
     else:
         raise IOError(not_valid_format)
-    return StrictVersion(version)
+    return LooseVersion(version)
 
 
-def file_reader(filename, record_by, mode='r', driver='core',
-                backing_store=False, load_to_memory=True, **kwds):
-    f = h5py.File(filename, mode=mode, driver=driver, **kwds)
+def file_reader(filename, backing_store=False,
+                lazy=False, **kwds):
+    mode = kwds.pop('mode', 'r+')
+    f = h5py.File(filename, mode=mode, **kwds)
     # Getting the format version here also checks if it is a valid HSpy
     # hdf5 file, so the following two lines must not be deleted or moved
     # elsewhere.
@@ -127,13 +140,13 @@ def file_reader(filename, record_by, mode='r', driver='core',
                     # del m_gr[model_name].attrs['_signal']
                     res = hdfgroup2dict(
                         m_gr[model_name],
-                        load_to_memory=load_to_memory)
+                        lazy=lazy)
                     del res['_signal']
                     models_with_signals.append((key, {model_name: res}))
                 else:
                     standalone_models.append(
                         {model_name: hdfgroup2dict(
-                            m_gr[model_name], load_to_memory=load_to_memory)})
+                            m_gr[model_name], lazy=lazy)})
         except TypeError:
             raise IOError(not_valid_format)
 
@@ -147,7 +160,7 @@ def file_reader(filename, record_by, mode='r', driver='core',
         # Parse the file
         for experiment in experiments:
             exg = f['Experiments'][experiment]
-            exp = hdfgroup2signaldict(exg, load_to_memory)
+            exp = hdfgroup2signaldict(exg, lazy)
             # assign correct models, if found:
             _tmp = {}
             for (key, _dict) in reversed(models_with_signals):
@@ -167,15 +180,15 @@ def file_reader(filename, record_by, mode='r', driver='core',
                       'You can still load the data using a hdf5 reader, '
                       'e.g. h5py, and manually create a Signal. '
                       'Please, refer to the User Guide for details')
-    if load_to_memory:
+    if not lazy:
         f.close()
     return exp_dict_list
 
 
-def hdfgroup2signaldict(group, load_to_memory=True):
+def hdfgroup2signaldict(group, lazy=False):
     global current_file_version
     global default_version
-    if current_file_version < StrictVersion("1.2"):
+    if current_file_version < LooseVersion("1.2"):
         metadata = "mapped_parameters"
         original_metadata = "original_parameters"
     else:
@@ -183,13 +196,17 @@ def hdfgroup2signaldict(group, load_to_memory=True):
         original_metadata = "original_metadata"
 
     exp = {'metadata': hdfgroup2dict(
-               group[metadata], load_to_memory=load_to_memory),
-           'original_metadata': hdfgroup2dict(
-               group[original_metadata], load_to_memory=load_to_memory)
-           }
+        group[metadata], lazy=lazy),
+        'original_metadata': hdfgroup2dict(
+            group[original_metadata], lazy=lazy),
+        'attributes': {}
+    }
 
     data = group['data']
-    if load_to_memory:
+    if lazy:
+        data = da.from_array(data, chunks=data.chunks)
+        exp['attributes']['_lazy'] = True
+    else:
         data = np.asanyarray(data)
     exp['data'] = data
     axes = []
@@ -198,28 +215,30 @@ def hdfgroup2signaldict(group, load_to_memory=True):
             axes.append(dict(group['axis-%i' % i].attrs))
             axis = axes[-1]
             for key, item in axis.items():
-                axis[key] = ensure_unicode(item)
+                if isinstance(item, np.bool_):
+                    axis[key] = bool(item)
+                else:
+                    axis[key] = ensure_unicode(item)
         except KeyError:
             break
     if len(axes) != len(exp['data'].shape):  # broke from the previous loop
         try:
             axes = [i for k, i in sorted(iter(hdfgroup2dict(
                 group['_list_' + str(len(exp['data'].shape)) + '_axes'],
-                load_to_memory=load_to_memory).items()))]
+                lazy=lazy).items()))]
         except KeyError:
             raise IOError(not_valid_format)
     exp['axes'] = axes
-    exp['attributes'] = {}
     if 'learning_results' in group.keys():
         exp['attributes']['learning_results'] = \
             hdfgroup2dict(
                 group['learning_results'],
-                load_to_memory=load_to_memory)
+                lazy=lazy)
     if 'peak_learning_results' in group.keys():
         exp['attributes']['peak_learning_results'] = \
             hdfgroup2dict(
                 group['peak_learning_results'],
-                load_to_memory=load_to_memory)
+                lazy=lazy)
 
     # If the title was not defined on writing the Experiment is
     # then called __unnamed__. The next "if" simply sets the title
@@ -228,15 +247,15 @@ def hdfgroup2signaldict(group, load_to_memory=True):
         if '__unnamed__' == exp['metadata']['General']['title']:
             exp['metadata']["General"]['title'] = ''
 
-    if current_file_version < StrictVersion("1.1"):
+    if current_file_version < LooseVersion("1.1"):
         # Load the decomposition results written with the old name,
         # mva_results
         if 'mva_results' in group.keys():
             exp['attributes']['learning_results'] = hdfgroup2dict(
-                group['mva_results'], load_to_memory=load_to_memory)
+                group['mva_results'], lazy=lazy)
         if 'peak_mva_results' in group.keys():
             exp['attributes']['peak_learning_results'] = hdfgroup2dict(
-                group['peak_mva_results'], load_to_memory=load_to_memory)
+                group['peak_mva_results'], lazy=lazy)
         # Replace the old signal and name keys with their current names
         if 'signal' in exp['metadata']:
             if "Signal" not in exp["metadata"]:
@@ -252,7 +271,7 @@ def hdfgroup2signaldict(group, load_to_memory=True):
                 exp['metadata']['name']
             del exp['metadata']['name']
 
-    if current_file_version < StrictVersion("1.2"):
+    if current_file_version < LooseVersion("1.2"):
         if '_internal_parameters' in exp['metadata']:
             exp['metadata']['_HyperSpy'] = \
                 exp['metadata']['_internal_parameters']
@@ -341,16 +360,16 @@ def hdfgroup2signaldict(group, load_to_memory=True):
     return exp
 
 
-def dict2hdfgroup(dictionary, group, compression=None):
+def dict2hdfgroup(dictionary, group, **kwds):
     from hyperspy.misc.utils import DictionaryTreeBrowser
-    from hyperspy.signal import Signal
+    from hyperspy.signal import BaseSignal
 
-    def parse_structure(key, group, value, _type, compression):
+    def parse_structure(key, group, value, _type, **kwds):
         try:
             # Here we check if there are any signals in the container, as
             # casting a long list of signals to a numpy array takes a very long
             # time. So we check if there are any, and save numpy the trouble
-            if np.any([isinstance(t, Signal) for t in value]):
+            if np.any([isinstance(t, BaseSignal) for t in value]):
                 tmp = np.array([[0]])
             else:
                 tmp = np.array(value)
@@ -360,39 +379,36 @@ def dict2hdfgroup(dictionary, group, compression=None):
             dict2hdfgroup(dict(zip(
                 [str(i) for i in range(len(value))], value)),
                 group.create_group(_type + str(len(value)) + '_' + key),
-                compression=compression)
+                **kwds)
         elif tmp.dtype.type is np.unicode_:
+            if _type + key in group:
+                del group[_type + key]
             group.create_dataset(_type + key,
                                  tmp.shape,
                                  dtype=h5py.special_dtype(vlen=str),
-                                 compression=compression)
+                                 **kwds)
             group[_type + key][:] = tmp[:]
         else:
+            if _type + key in group:
+                del group[_type + key]
             group.create_dataset(
                 _type + key,
                 data=tmp,
-                compression=compression)
+                **kwds)
 
     for key, value in dictionary.items():
         if isinstance(value, dict):
             dict2hdfgroup(value, group.create_group(key),
-                          compression=compression)
+                          **kwds)
         elif isinstance(value, DictionaryTreeBrowser):
             dict2hdfgroup(value.as_dictionary(),
                           group.create_group(key),
-                          compression=compression)
-        elif isinstance(value, Signal):
-            if key.startswith('_sig_'):
-                try:
-                    write_signal(value, group[key])
-                except:
-                    write_signal(value, group.create_group(key))
-            else:
-                write_signal(value, group.create_group('_sig_' + key))
-        elif isinstance(value, np.ndarray):
-            group.create_dataset(key,
-                                 data=value,
-                                 compression=compression)
+                          **kwds)
+        elif isinstance(value, BaseSignal):
+            kn = key if key.startswith('_sig_') else '_sig_' + key
+            write_signal(value, group.require_group(kn))
+        elif isinstance(value, (np.ndarray, h5py.Dataset, da.Array)):
+            overwrite_dataset(group, value, key, **kwds)
         elif value is None:
             group.attrs[key] = '_None_'
         elif isinstance(value, bytes):
@@ -408,17 +424,15 @@ def dict2hdfgroup(dictionary, group, compression=None):
         elif isinstance(value, AxesManager):
             dict2hdfgroup(value.as_dictionary(),
                           group.create_group('_hspy_AxesManager_' + key),
-                          compression=compression)
-        elif isinstance(value, (datetime.date, datetime.time)):
-            group.attrs["_datetime_" + key] = repr(value)
+                          **kwds)
         elif isinstance(value, list):
             if len(value):
-                parse_structure(key, group, value, '_list_', compression)
+                parse_structure(key, group, value, '_list_', **kwds)
             else:
                 group.attrs['_list_empty_' + key] = '_None_'
         elif isinstance(value, tuple):
             if len(value):
-                parse_structure(key, group, value, '_tuple_', compression)
+                parse_structure(key, group, value, '_tuple_', **kwds)
             else:
                 group.attrs['_tuple_empty_' + key] = '_None_'
 
@@ -433,7 +447,88 @@ def dict2hdfgroup(dictionary, group, compression=None):
                     "information in the file: %s : %s", key, value)
 
 
-def hdfgroup2dict(group, dictionary=None, load_to_memory=True):
+def get_signal_chunks(shape, dtype, signal_axes=None):
+    """Function that claculates chunks for the signal, preferably at least one
+    chunk per signal space.
+
+    Parameters
+    ----------
+    shape : tuple
+        the shape of the dataset to be sored / chunked
+    dtype : {dtype, string}
+        the numpy dtype of the data
+    signal_axes: {None, iterable of ints}
+        the axes defining "signal space" of the dataset. If None, the default
+        h5py chunking is performed.
+    """
+    typesize = np.dtype(dtype).itemsize
+    if signal_axes is None:
+        return h5py._hl.filters.guess_chunk(shape, None, typesize)
+
+    # largely based on the guess_chunk in h5py
+    CHUNK_MAX = 1024 * 1024
+    want_to_keep = multiply([shape[i] for i in signal_axes]) * typesize
+    if want_to_keep >= CHUNK_MAX:
+        chunks = [1 for _ in shape]
+        for i in signal_axes:
+            chunks[i] = shape[i]
+        return tuple(chunks)
+
+    chunks = [i for i in shape]
+    idx = 0
+    navigation_axes = tuple(i for i in range(len(shape)) if i not in
+                            signal_axes)
+    nchange = len(navigation_axes)
+    while True:
+        chunk_bytes = multiply(chunks) * typesize
+
+        if chunk_bytes < CHUNK_MAX:
+            break
+
+        if multiply([chunks[i] for i in navigation_axes]) == 1:
+            break
+        change = navigation_axes[idx % nchange]
+        chunks[change] = np.ceil(chunks[change] / 2.0)
+        idx += 1
+    return tuple(int(x) for x in chunks)
+
+
+def overwrite_dataset(group, data, key, signal_axes=None, **kwds):
+    if signal_axes is None:
+        chunks = True
+    else:
+        chunks = get_signal_chunks(data.shape, data.dtype, signal_axes)
+
+    maxshape = tuple(None for _ in data.shape)
+
+    got_data = False
+    while not got_data:
+        try:
+            these_kwds = kwds.copy()
+            these_kwds.update(dict(shape=data.shape,
+                                   dtype=data.dtype,
+                                   exact=True,
+                                   maxshape=maxshape,
+                                   chunks=chunks,
+                                   shuffle=True,))
+
+            dset = group.require_dataset(key, **these_kwds)
+            got_data = True
+        except TypeError:
+            # if the shape or dtype/etc do not match,
+            # we delete the old one and create new in the next loop run
+            del group[key]
+    if dset == data:
+        # just a reference to already created thing
+        pass
+    else:
+        if isinstance(data, da.Array):
+            da.store(data.rechunk(dset.chunks), dset)
+        else:
+            da.store(da.from_array(data, chunks=dset.chunks), dset)
+
+
+def hdfgroup2dict(group, dictionary=None, lazy=False):
     if dictionary is None:
         dictionary = {}
     for key, value in group.attrs.items():
@@ -444,10 +539,11 @@ def hdfgroup2dict(group, dictionary=None, load_to_memory=True):
                 value = None
         elif isinstance(value, np.bool_):
             value = bool(value)
-
-        elif isinstance(value, np.ndarray) and \
-                value.dtype == np.dtype('|S1'):
-            value = value.tolist()
+        elif isinstance(value, np.ndarray) and value.dtype.char == "S":
+            # Convert strings to unicode
+            value = value.astype("U")
+            if value.dtype.str.endswith("U1"):
+                value = value.tolist()
         # skip signals - these are handled below.
         if key.startswith('_sig_'):
             pass
@@ -457,8 +553,16 @@ def hdfgroup2dict(group, dictionary=None, load_to_memory=True):
             dictionary[key[len('_tuple_empty_'):]] = ()
         elif key.startswith('_bs_'):
             dictionary[key[len('_bs_'):]] = value.tostring()
-        elif key.startswith('_datetime_'):
-            dictionary[key.replace("_datetime_", "")] = eval(value)
+        # The following two elif stataments enable reading date and time from
+        # v < 2 of HyperSpy's metadata specifications
+        elif key.startswith('_datetime_date'):
+            date_iso = datetime.date(
+                *ast.literal_eval(value[value.index("("):])).isoformat()
+            dictionary[key.replace("_datetime_", "")] = date_iso
+        elif key.startswith('_datetime_time'):
+            date_iso = datetime.time(
+                *ast.literal_eval(value[value.index("("):])).isoformat()
+            dictionary[key.replace("_datetime_", "")] = date_iso
         else:
             dictionary[key] = value
     if not isinstance(group, h5py.Dataset):
@@ -467,100 +571,105 @@ def hdfgroup2dict(group, dictionary=None, load_to_memory=True):
                 from hyperspy.io import dict2signal
                 dictionary[key[len('_sig_'):]] = (
                     dict2signal(hdfgroup2signaldict(
-                        group[key], load_to_memory=load_to_memory)))
+                        group[key], lazy=lazy)))
             elif isinstance(group[key], h5py.Dataset):
+                dat = group[key]
+                kn = key
                 if key.startswith("_list_"):
-                    ans = np.array(group[key])
+                    ans = np.array(dat)
                     ans = ans.tolist()
                     kn = key[6:]
                 elif key.startswith("_tuple_"):
-                    ans = np.array(group[key])
+                    ans = np.array(dat)
                     ans = tuple(ans.tolist())
                     kn = key[7:]
-                elif load_to_memory:
-                    ans = np.array(group[key])
-                    kn = key
+                elif dat.dtype.char == "S":
+                    ans = np.array(dat)
+                    try:
+                        ans = ans.astype("U")
+                    except UnicodeDecodeError:
+                        # There are some strings that must stay in binary,
+                        # for example dill pickles. This will obviously also
+                        # let "wrong" binary string fail somewhere else...
+                        pass
+                elif lazy:
+                    ans = da.from_array(dat, chunks=dat.chunks)
                 else:
-                    # leave as h5py dataset
-                    ans = group[key]
-                    kn = key
+                    ans = np.array(dat)
                 dictionary[kn] = ans
             elif key.startswith('_hspy_AxesManager_'):
                 dictionary[key[len('_hspy_AxesManager_'):]] = AxesManager(
                     [i for k, i in sorted(iter(
                         hdfgroup2dict(
-                            group[key], load_to_memory=load_to_memory).items()
+                            group[key], lazy=lazy).items()
                     ))])
             elif key.startswith('_list_'):
                 dictionary[key[7 + key[6:].find('_'):]] = \
                     [i for k, i in sorted(iter(
                         hdfgroup2dict(
-                            group[key], load_to_memory=load_to_memory).items()
+                            group[key], lazy=lazy).items()
                     ))]
             elif key.startswith('_tuple_'):
                 dictionary[key[8 + key[7:].find('_'):]] = tuple(
                     [i for k, i in sorted(iter(
                         hdfgroup2dict(
-                            group[key], load_to_memory=load_to_memory).items()
+                            group[key], lazy=lazy).items()
                     ))])
             else:
                 dictionary[key] = {}
                 hdfgroup2dict(
                     group[key],
                     dictionary[key],
-                    load_to_memory=load_to_memory)
+                    lazy=lazy)
     return dictionary
 
 
-def write_signal(signal, group, compression='gzip'):
-    if default_version < StrictVersion("1.2"):
+def write_signal(signal, group, **kwds):
+    if default_version < LooseVersion("1.2"):
         metadata = "mapped_parameters"
         original_metadata = "original_parameters"
     else:
         metadata = "metadata"
         original_metadata = "original_metadata"
+    if 'compression' not in kwds:
+        kwds['compression'] = 'gzip'
 
-    group.create_dataset('data',
-                         data=signal.data,
-                         compression=compression)
     for axis in signal.axes_manager._axes:
         axis_dict = axis.get_axis_dictionary()
-        # For the moment we don't store the navigate attribute
-        del(axis_dict['navigate'])
         coord_group = group.create_group(
             'axis-%s' % axis.index_in_array)
-        dict2hdfgroup(axis_dict, coord_group, compression=compression)
+        dict2hdfgroup(axis_dict, coord_group, **kwds)
     mapped_par = group.create_group(metadata)
     metadata_dict = signal.metadata.as_dictionary()
-    if default_version < StrictVersion("1.2"):
+    overwrite_dataset(group, signal.data, 'data',
+                      signal_axes=signal.axes_manager.signal_indices_in_array,
+                      **kwds)
+    if default_version < LooseVersion("1.2"):
         metadata_dict["_internal_parameters"] = \
             metadata_dict.pop("_HyperSpy")
-    dict2hdfgroup(metadata_dict,
-                  mapped_par, compression=compression)
+    dict2hdfgroup(metadata_dict, mapped_par, **kwds)
     original_par = group.create_group(original_metadata)
-    dict2hdfgroup(signal.original_metadata.as_dictionary(),
-                  original_par, compression=compression)
+    dict2hdfgroup(signal.original_metadata.as_dictionary(), original_par,
+                  **kwds)
     learning_results = group.create_group('learning_results')
     dict2hdfgroup(signal.learning_results.__dict__,
-                  learning_results, compression=compression)
+                  learning_results, **kwds)
     if hasattr(signal, 'peak_learning_results'):
         peak_learning_results = group.create_group(
             'peak_learning_results')
         dict2hdfgroup(signal.peak_learning_results.__dict__,
-                      peak_learning_results, compression=compression)
+                      peak_learning_results, **kwds)
 
     if len(signal.models):
         model_group = group.file.require_group('Analysis/models')
         dict2hdfgroup(signal.models._models.as_dictionary(),
-                      model_group,
-                      compression=compression)
+                      model_group, **kwds)
         for model in model_group.values():
             model.attrs['_signal'] = group.name
 
 
 def file_writer(filename,
                 signal,
-                compression='gzip',
                 *args, **kwds):
     with h5py.File(filename, mode='w') as f:
         f.attrs['file_format'] = "HyperSpy"
@@ -568,5 +677,23 @@ def file_writer(filename,
         exps = f.create_group('Experiments')
         group_name = signal.metadata.General.title if \
             signal.metadata.General.title else '__unnamed__'
+        # / is a invalid character, see #942
+        if "/" in group_name:
+            group_name = group_name.replace("/", "-")
         expg = exps.create_group(group_name)
-        write_signal(signal, expg, compression=compression)
+        if 'compression' not in kwds:
+            kwds['compression'] = 'gzip'
+        # Add record_by metadata for backward compatibility
+        smd = signal.metadata.Signal
+        if signal.axes_manager.signal_dimension == 1:
+            smd.record_by = "spectrum"
+        elif signal.axes_manager.signal_dimension == 2:
+            smd.record_by = "image"
+        else:
+            smd.record_by = ""
+        try:
+            write_signal(signal, expg, **kwds)
+        except:
+            raise
+        finally:
+            del smd.record_by

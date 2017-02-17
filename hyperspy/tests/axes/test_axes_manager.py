@@ -17,16 +17,14 @@
 # You should have received a copy of the GNU General Public License
 # along with  HyperSpy.  If not, see <http://www.gnu.org/licenses/>.
 
-import mock
-
-import nose.tools as nt
+from unittest import mock
 
 from hyperspy.axes import DataAxis, AxesManager
 
 
 class TestAxesManager:
 
-    def setup(self):
+    def setup_method(self, method):
         axes_list = [
             {'name': 'a',
              'navigate': True,
@@ -55,21 +53,25 @@ class TestAxesManager:
 
         self.am = AxesManager(axes_list)
 
+    def test_reprs(self):
+        repr(self.am)
+        self.am._repr_html_
+
     def test_update_from(self):
         am = self.am
         am2 = self.am.deepcopy()
         m = mock.Mock()
         am.events.any_axis_changed.connect(m.changed)
         am.update_axes_attributes_from(am2._axes)
-        nt.assert_false(m.changed.called)
+        assert not m.changed.called
         am2[0].scale = 0.5
         am2[1].units = "km"
         am2[2].offset = 50
         am2[3].size = 1
         am.update_axes_attributes_from(am2._axes,
                                        attributes=["units", "scale"])
-        nt.assert_true(m.changed.called)
-        nt.assert_equal(am2[0].scale, am[0].scale)
-        nt.assert_equal(am2[1].units, am[1].units)
-        nt.assert_not_equal(am2[2].offset, am[2].offset)
-        nt.assert_not_equal(am2[3].size, am[3].size)
+        assert m.changed.called
+        assert am2[0].scale == am[0].scale
+        assert am2[1].units == am[1].units
+        assert am2[2].offset != am[2].offset
+        assert am2[3].size != am[3].size

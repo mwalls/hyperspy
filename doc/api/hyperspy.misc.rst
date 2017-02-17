@@ -8,6 +8,7 @@ Subpackages
 
     hyperspy.misc.eds
     hyperspy.misc.eels
+    hyperspy.misc.holography
     hyperspy.misc.io
     hyperspy.misc.machine_learning
 
@@ -26,6 +27,14 @@ hyperspy.misc.config_dir module
 -------------------------------
 
 .. automodule:: hyperspy.misc.config_dir
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+hyperspy.misc.date_time_tools module
+------------------------------------
+
+.. automodule:: hyperspy.misc.date_time_tools
     :members:
     :undoc-members:
     :show-inheritance:
@@ -54,14 +63,6 @@ hyperspy.misc.export_dictionary module
     :undoc-members:
     :show-inheritance:
 
-hyperspy.misc.image_tools module
---------------------------------
-
-.. automodule:: hyperspy.misc.image_tools
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 hyperspy.misc.ipython_tools module
 ----------------------------------
 
@@ -82,14 +83,6 @@ hyperspy.misc.math_tools module
 -------------------------------
 
 .. automodule:: hyperspy.misc.math_tools
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
-hyperspy.misc.natsort module
-----------------------------
-
-.. automodule:: hyperspy.misc.natsort
     :members:
     :undoc-members:
     :show-inheritance:
@@ -118,14 +111,6 @@ hyperspy.misc.rgb_tools module
     :undoc-members:
     :show-inheritance:
 
-hyperspy.misc.slicing module
-----------------------------
-
-.. automodule:: hyperspy.misc.slicing
-    :members:
-    :undoc-members:
-    :show-inheritance:
-
 hyperspy.misc.signal_tools module
 ---------------------------------
 
@@ -134,10 +119,10 @@ hyperspy.misc.signal_tools module
     :undoc-members:
     :show-inheritance:
 
-hyperspy.misc.spectrum_tools module
------------------------------------
+hyperspy.misc.slicing module
+----------------------------
 
-.. automodule:: hyperspy.misc.spectrum_tools
+.. automodule:: hyperspy.misc.slicing
     :members:
     :undoc-members:
     :show-inheritance:

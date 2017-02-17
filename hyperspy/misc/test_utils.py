@@ -5,8 +5,10 @@
 from contextlib import contextmanager
 import warnings
 import re
-import sys
-import inspect
+
+import numpy as np
+import numpy.testing as nt
+from numpy.testing import assert_allclose
 
 
 @contextmanager
@@ -159,3 +161,45 @@ def assert_warns(message=None, category=None):
         if len(remaining) > 0:
             msg = 'No warning raised matching:\n%s' % '\n'.join(remaining)
             raise ValueError(msg)
+
+
+# Adapted from:
+# https://github.com/gem/oq-engine/blob/master/openquake/server/tests/helpers.py
+def assert_deep_almost_equal(actual, expected, *args, **kwargs):
+    """ Assert that two complex structures have almost equal contents.
+    Compares lists, dicts and tuples recursively. Checks numeric values
+    using :py:meth:`assert_allclose` and
+    checks all other values with :py:meth:`assert_equal`.
+    Accepts additional positional and keyword arguments and pass those
+    intact to assert_allclose() (that's how you specify comparison
+    precision).
+    Parameters
+    ----------
+    actual: lists, dicts or tuples
+
+    expected: lists, dicts or tuples
+    """
+    is_root = not '__trace' in kwargs
+    trace = kwargs.pop('__trace', 'ROOT')
+    try:
+        if isinstance(expected, (int, float, complex)):
+            assert_allclose(expected, actual, *args, **kwargs)
+        elif isinstance(expected, (list, tuple, np.ndarray)):
+            assert len(expected) == len(actual)
+            for index in range(len(expected)):
+                v1, v2 = expected[index], actual[index]
+                assert_deep_almost_equal(v1, v2,
+                                         __trace=repr(index), *args, **kwargs)
+        elif isinstance(expected, dict):
+            assert set(expected) == set(actual)
+            for key in expected:
+                assert_deep_almost_equal(expected[key], actual[key],
+                                         __trace=repr(key), *args, **kwargs)
+        else:
+            assert expected == actual
+    except AssertionError as exc:
+        exc.__dict__.setdefault('traces', []).append(trace)
+        if is_root:
+            trace = ' -> '.join(reversed(exc.traces))
+            exc = AssertionError("%s\nTRACE: %s" % (exc, trace))
+        raise exc

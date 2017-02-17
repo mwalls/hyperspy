@@ -1,23 +1,23 @@
 import numpy as np
+import pytest
 
-import nose.tools
-from nose.tools import assert_true, raises
 from hyperspy import signals
+from hyperspy.misc.machine_learning.import_sklearn import sklearn_installed
 
 
 class TestNdAxes:
 
-    def setUp(self):
+    def setup_method(self, method):
         # Create three signals with dimensions:
-        # s1 : <Signal, title: , dimensions: (4, 3, 2|2, 3)>
-        # s2 : <Signal, title: , dimensions: (2, 3|4, 3, 2)>
-        # s12 : <Signal, title: , dimensions: (2, 3|4, 3, 2)>
+        # s1 : <BaseSignal, title: , dimensions: (4, 3, 2|2, 3)>
+        # s2 : <BaseSignal, title: , dimensions: (2, 3|4, 3, 2)>
+        # s12 : <BaseSignal, title: , dimensions: (2, 3|4, 3, 2)>
         # Where s12 data is transposed in respect to s2
         dc1 = np.random.random((2, 3, 4, 3, 2))
         dc2 = np.rollaxis(np.rollaxis(dc1, -1), -1)
-        s1 = signals.Signal(dc1.copy())
-        s2 = signals.Signal(dc2)
-        s12 = signals.Signal(dc1.copy())
+        s1 = signals.BaseSignal(dc1.copy())
+        s2 = signals.BaseSignal(dc2)
+        s12 = signals.BaseSignal(dc1.copy())
         for i, axis in enumerate(s1.axes_manager._axes):
             if i < 3:
                 axis.navigate = True
@@ -37,7 +37,7 @@ class TestNdAxes:
         self.s2 = s2
         self.s12 = s12
 
-    def test_consistensy(self):
+    def test_consistency(self):
         s1 = self.s1
         s2 = self.s2
         s12 = self.s12
@@ -53,7 +53,7 @@ class TestNdAxes:
         np.testing.assert_array_almost_equal(s1.learning_results.factors,
                                              s2.learning_results.loadings)
 
-    def test_consistensy_poissonian(self):
+    def test_consistency_poissonian(self):
         s1 = self.s1
         s1n000 = self.s1.inav[0, 0, 0]
         s2 = self.s2
@@ -75,8 +75,8 @@ class TestNdAxes:
 
 class TestGetExplainedVarinaceRatio:
 
-    def setUp(self):
-        s = signals.Signal(np.empty(1))
+    def setup_method(self, method):
+        s = signals.BaseSignal(np.empty(1))
         self.s = s
 
     def test_data(self):
@@ -85,15 +85,15 @@ class TestGetExplainedVarinaceRatio:
             self.s.get_explained_variance_ratio().data,
             np.asarray([2, 4]))
 
-    @raises(AttributeError)
     def test_no_evr(self):
-        self.s.get_explained_variance_ratio()
+        with pytest.raises(AttributeError):
+            self.s.get_explained_variance_ratio()
 
 
 class TestReverseDecompositionComponent:
 
-    def setUp(self):
-        s = signals.Signal(np.zeros(1))
+    def setup_method(self, method):
+        s = signals.BaseSignal(np.zeros(1))
         self.factors = np.ones([2, 3])
         self.loadings = np.ones([2, 3])
         s.learning_results.factors = self.factors.copy()
@@ -102,49 +102,49 @@ class TestReverseDecompositionComponent:
 
     def test_reversal_factors_one_component_reversed(self):
         self.s.reverse_decomposition_component(0)
-        assert_true((self.s.learning_results.factors[:, 0] ==
-                     self.factors[:, 0] * -1).all())
+        np.testing.assert_array_equal(self.s.learning_results.factors[:, 0],
+                                      self.factors[:, 0] * -1)
 
     def test_reversal_loadings_one_component_reversed(self):
         self.s.reverse_decomposition_component(0)
-        assert_true((self.s.learning_results.loadings[:, 0] ==
-                     self.loadings[:, 0] * -1).all())
+        np.testing.assert_array_equal(self.s.learning_results.loadings[:, 0],
+                                      self.loadings[:, 0] * -1)
 
     def test_reversal_factors_one_component_not_reversed(self):
         self.s.reverse_decomposition_component(0)
-        assert_true((self.s.learning_results.factors[:, 1:] ==
-                     self.factors[:, 1:]).all())
+        np.testing.assert_array_equal(self.s.learning_results.factors[:, 1:],
+                                      self.factors[:, 1:])
 
     def test_reversal_loadings_one_component_not_reversed(self):
         self.s.reverse_decomposition_component(0)
-        assert_true((self.s.learning_results.loadings[:, 1:] ==
-                     self.loadings[:, 1:]).all())
+        np.testing.assert_array_equal(self.s.learning_results.loadings[:, 1:],
+                                      self.loadings[:, 1:])
 
     def test_reversal_factors_multiple_components_reversed(self):
         self.s.reverse_decomposition_component((0, 2))
-        assert_true((self.s.learning_results.factors[:, (0, 2)] ==
-                     self.factors[:, (0, 2)] * -1).all())
+        np.testing.assert_array_equal(self.s.learning_results.factors[:, (0, 2)],
+                                      self.factors[:, (0, 2)] * -1)
 
     def test_reversal_loadings_multiple_components_reversed(self):
         self.s.reverse_decomposition_component((0, 2))
-        assert_true((self.s.learning_results.loadings[:, (0, 2)] ==
-                     self.loadings[:, (0, 2)] * -1).all())
+        np.testing.assert_array_equal(self.s.learning_results.loadings[:, (0, 2)],
+                                      self.loadings[:, (0, 2)] * -1)
 
     def test_reversal_factors_multiple_components_not_reversed(self):
         self.s.reverse_decomposition_component((0, 2))
-        assert_true((self.s.learning_results.factors[:, 1] ==
-                     self.factors[:, 1]).all())
+        np.testing.assert_array_equal(self.s.learning_results.factors[:, 1],
+                                      self.factors[:, 1])
 
     def test_reversal_loadings_multiple_components_not_reversed(self):
         self.s.reverse_decomposition_component((0, 2))
-        assert_true((self.s.learning_results.loadings[:, 1] ==
-                     self.loadings[:, 1]).all())
+        np.testing.assert_array_equal(self.s.learning_results.loadings[:, 1],
+                                      self.loadings[:, 1])
 
 
 class TestNormalizeComponents():
 
-    def setUp(self):
-        s = signals.Signal(np.zeros(1))
+    def setup_method(self, method):
+        s = signals.BaseSignal(np.zeros(1))
         self.factors = np.ones([2, 3])
         self.loadings = np.ones([2, 3])
         s.learning_results.factors = self.factors.copy()
@@ -157,38 +157,75 @@ class TestNormalizeComponents():
         s = self.s
         s.normalize_bss_components(target="factors",
                                    function=np.sum)
-        nose.tools.assert_true(
-            (s.learning_results.bss_factors == self.factors / 2.).all())
-        nose.tools.assert_true(
-            (s.learning_results.bss_loadings == self.loadings * 2.).all())
+        np.testing.assert_array_equal(s.learning_results.bss_factors,
+                                      self.factors / 2.)
+        np.testing.assert_array_equal(s.learning_results.bss_loadings,
+                                      self.loadings * 2.)
 
     def test_normalize_bss_loadings(self):
         s = self.s
         s.normalize_bss_components(target="loadings",
                                    function=np.sum)
-        nose.tools.assert_true(
-            (s.learning_results.bss_factors == self.factors * 2.).all())
-        nose.tools.assert_true(
-            (s.learning_results.bss_loadings == self.loadings / 2.).all())
+        np.testing.assert_array_equal(s.learning_results.bss_factors,
+                                      self.factors * 2.)
+        np.testing.assert_array_equal(s.learning_results.bss_loadings,
+                                      self.loadings / 2.)
 
     def test_normalize_decomposition_factors(self):
         s = self.s
         s.normalize_decomposition_components(target="factors",
                                              function=np.sum)
-        nose.tools.assert_true(
-            (s.learning_results.factors ==
-             self.factors / 2.).all())
-        nose.tools.assert_true(
-            (s.learning_results.loadings ==
-             self.loadings * 2.).all())
+        np.testing.assert_array_equal(s.learning_results.factors,
+                                      self.factors / 2.)
+        np.testing.assert_array_equal(s.learning_results.loadings,
+                                      self.loadings * 2.)
 
     def test_normalize_decomposition_loadings(self):
         s = self.s
         s.normalize_decomposition_components(target="loadings",
                                              function=np.sum)
-        nose.tools.assert_true(
-            (s.learning_results.factors ==
-             self.factors * 2.).all())
-        nose.tools.assert_true(
-            (s.learning_results.loadings ==
-             self.loadings / 2.).all())
+        np.testing.assert_array_equal(s.learning_results.factors,
+                                      self.factors * 2.)
+        np.testing.assert_array_equal(s.learning_results.loadings,
+                                      self.loadings / 2.)
+
+
+class TestReturnInfo:
+
+    def setup_method(self, method):
+        self.s = signals.Signal1D(np.random.random((20, 100)))
+
+    def test_decomposition_not_supported(self):
+        # Not testing MLPCA, takes too long
+        for algorithm in ["svd", "fast_svd"]:
+            print(algorithm)
+            assert self.s.decomposition(
+                algorithm=algorithm, return_info=True, output_dimension=1) is None
+
+    @pytest.mark.skipif(not sklearn_installed, reason="sklearn not installed")
+    def test_decomposition_supported_return_true(self):
+        for algorithm in ["RPCA_GoDec", "ORPCA"]:
+            assert self.s.decomposition(
+                algorithm=algorithm,
+                return_info=True,
+                output_dimension=1) is not None
+        for algorithm in ["sklearn_pca", "nmf",
+                          "sparse_pca", "mini_batch_sparse_pca", ]:
+            assert self.s.decomposition(
+                algorithm=algorithm,
+                return_info=True,
+                output_dimension=1) is not None
+
+    @pytest.mark.skipif(not sklearn_installed, reason="sklearn not installed")
+    def test_decomposition_supported_return_false(self):
+        for algorithm in ["RPCA_GoDec", "ORPCA"]:
+            assert self.s.decomposition(
+                algorithm=algorithm,
+                return_info=False,
+                output_dimension=1) is None
+        for algorithm in ["sklearn_pca", "nmf",
+                          "sparse_pca", "mini_batch_sparse_pca", ]:
+            assert self.s.decomposition(
+                algorithm=algorithm,
+                return_info=False,
+                output_dimension=1) is None
