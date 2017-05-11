@@ -335,8 +335,8 @@ and blind source separation. All the methods begin with "plot_":
 
 1 and 4 (new in version 0.7) provide a more compact way of displaying the
 results. All the other methods display each component in its own window. For 2
-and 3 it is wise to provide the number of factors or loadings you wish to
-visualise, since the default is to plot all of them. For BSS, the default is
+and 3 you must provide the number of factors or loadings you wish to
+visualise. For BSS, the default is
 the number you included when running the :py:meth:`~.learn.mva.MVA.blind_source_separation`
 method.
 
